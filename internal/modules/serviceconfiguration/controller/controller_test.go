@@ -100,6 +100,9 @@ func TestServiceAPI(t *testing.T) {
 	request := func(method, path, body, token string) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
@@ -126,6 +129,7 @@ func TestServiceAPI(t *testing.T) {
 		{"POST", path, `{"name":"x","command":"go","unknown":1}`, 400},
 		{"GET", path + "?limit=0", "", 400},
 		{"GET", path + "?offset=-1", "", 400},
+		{"GET", path + "?offset=1000001", "", 400},
 		{"GET", "/api/v1/services/bad", "", 400},
 	} {
 		w := request(tc.method, tc.path, tc.body, "token")
