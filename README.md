@@ -51,7 +51,9 @@ The token is generated once using a cryptographic random source and stored at `D
 
 Startup calls `database.Migrate` with the explicitly registered Workspace model. GORM AutoMigrate does not provide a safe general rollback or every schema evolution; review schema changes before upgrading a populated database.
 
-After changing the Workspace model, run `go run ./cmd/gen` to regenerate `internal/dal/query`; do not edit generated files. The generator uses `ApplyBasic` on the Go model and does not require a live database. Workspace repositories resolve the active GORM connection or transaction from `context.Context` when constructed and use `query.Use(db)` for generated queries. The HTTP route supplies the application's DB in request context.
+After changing the Workspace model, run `go run ./cmd/gen` to regenerate `internal/dal/query`; do not edit generated files. The generator uses `ApplyBasic` on the Go model and does not require a live database. The application injects its DB into the workspace repository, which uses `query.Use(db)` for generated queries. Repository methods pass each request context to GORM Gen for cancellation and deadlines. A caller needing a transaction can construct a repository with that transaction.
+
+Each module defines its endpoints in its own `routes` package. `internal/routes/routes.go` passes the authenticated `/api/v1` router to each module for registration.
 
 ## Tests
 

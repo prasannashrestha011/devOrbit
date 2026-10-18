@@ -11,11 +11,12 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/prasannashrestha011/devOrbit/internal/api"
 	"github.com/prasannashrestha011/devOrbit/internal/config"
 	"github.com/prasannashrestha011/devOrbit/internal/database"
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/model"
-	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/routes"
+	"github.com/prasannashrestha011/devOrbit/internal/routes"
 	"github.com/prasannashrestha011/devOrbit/internal/security"
 )
 
@@ -46,7 +47,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	address := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
 	server := &http.Server{
 		Addr:              address,
-		Handler:           api.Router(log, token, "http://"+address, sqlDB.PingContext, routes.New(db)),
+		Handler:           api.Router(log, token, "http://"+address, sqlDB.PingContext, func(r chi.Router) { routes.Register(r, db) }),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,

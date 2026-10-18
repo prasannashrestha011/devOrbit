@@ -13,7 +13,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
-func Router(log *slog.Logger, token, allowedOrigin string, ping func(context.Context) error, workspaces http.Handler) http.Handler {
+func Router(log *slog.Logger, token, allowedOrigin string, ping func(context.Context) error, registerModules func(chi.Router)) http.Handler {
 	r := chi.NewRouter()
 	r.Use(requestLog(log), recoverPanic(log))
 	r.NotFound(func(w http.ResponseWriter, _ *http.Request) {
@@ -39,8 +39,8 @@ func Router(log *slog.Logger, token, allowedOrigin string, ping func(context.Con
 		r.Get("/system/info", func(w http.ResponseWriter, _ *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]string{"name": "DevOrbit", "api_version": "v1"})
 		})
-		if workspaces != nil {
-			r.Mount("/workspaces", workspaces)
+		if registerModules != nil {
+			registerModules(r)
 		}
 	})
 	return r
