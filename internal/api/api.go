@@ -36,6 +36,12 @@ func Router(log *slog.Logger, token, allowedOrigin string, ping func(context.Con
 	})
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(authenticate(token, allowedOrigin))
+		r.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				req.Body = http.MaxBytesReader(w, req.Body, 1<<20)
+				next.ServeHTTP(w, req)
+			})
+		})
 		r.Get("/system/info", func(w http.ResponseWriter, _ *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]string{"name": "DevOrbit", "api_version": "v1"})
 		})
@@ -59,11 +65,16 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 func authenticate(token, allowedOrigin string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if origin := r.Header.Get("Origin"); origin != "" && origin != allowedOrigin {
+			if origins := r.Header.Values("Origin"); len(origins) > 1 || len(origins) == 1 && origins[0] != allowedOrigin {
 				writeError(w, http.StatusForbidden, "origin_forbidden", "origin is not allowed")
 				return
 			}
-			provided, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+			credentials := r.Header.Values("Authorization")
+			if len(credentials) != 1 {
+				writeError(w, http.StatusUnauthorized, "unauthorized", "valid bearer token required")
+				return
+			}
+			provided, ok := strings.CutPrefix(credentials[0], "Bearer ")
 			if !ok || subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
 				writeError(w, http.StatusUnauthorized, "unauthorized", "valid bearer token required")
 				return

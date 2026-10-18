@@ -19,7 +19,7 @@ import (
 )
 
 type workspaceMemoryStore struct {
-	items map[uuid.UUID]*model.Workspace
+	items     map[uuid.UUID]*model.Workspace
 	deleteErr error
 }
 
@@ -54,7 +54,9 @@ func (s *workspaceMemoryStore) Update(ctx context.Context, id uuid.UUID, changes
 	return item, nil
 }
 func (s *workspaceMemoryStore) Delete(_ context.Context, id uuid.UUID) error {
-	if s.deleteErr != nil { return s.deleteErr }
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
 	if s.items[id] == nil {
 		return repository.ErrNotFound
 	}
@@ -76,6 +78,9 @@ func TestWorkspaceAPI(t *testing.T) {
 	request := func(method, path, body, token string) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
@@ -95,6 +100,7 @@ func TestWorkspaceAPI(t *testing.T) {
 		{http.MethodPost, "", `{"name":"x","root_path":"/tmp","extra":true}`},
 		{http.MethodGet, "?limit=0", ""},
 		{http.MethodGet, "?offset=-1", ""},
+		{http.MethodGet, "?offset=1000001", ""},
 		{http.MethodGet, "/invalid", ""},
 		{http.MethodPatch, "/" + uuid.NewString(), `{}`},
 		{http.MethodPatch, "/" + uuid.NewString(), `{"id":"bad"}`},
@@ -103,6 +109,13 @@ func TestWorkspaceAPI(t *testing.T) {
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("%s %s: %d %s", tc.method, tc.suffix, w.Code, w.Body.String())
 		}
+	}
+	missingType := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"name":"x","root_path":"/tmp"}`))
+	missingType.Header.Set("Authorization", "Bearer test-token")
+	missingTypeResponse := httptest.NewRecorder()
+	api.ServeHTTP(missingTypeResponse, missingType)
+	if missingTypeResponse.Code != http.StatusBadRequest {
+		t.Fatalf("missing JSON content type: %d", missingTypeResponse.Code)
 	}
 	root := t.TempDir()
 	createBody, _ := json.Marshal(map[string]string{"name": " project ", "description": "notes", "root_path": root})
