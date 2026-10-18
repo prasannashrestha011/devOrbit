@@ -78,7 +78,7 @@ func TestWorkspacePostgres(t *testing.T) {
 		t.Fatalf("ordered page: %+v %v", items, err)
 	}
 	updated, err := otherRepo.Update(ctx, first.ID, map[string]any{"description": "new"})
-	if err != nil || updated.ID != first.ID || updated.Description != "new" || updated.Name != "first" || !updated.CreatedAt.Equal(first.CreatedAt) || !updated.UpdatedAt.After(first.UpdatedAt) {
+	if err != nil || updated.ID != first.ID || updated.Description != "new" || updated.Name != "first" || !updated.CreatedAt.Equal(loaded.CreatedAt) || !updated.UpdatedAt.After(loaded.UpdatedAt) {
 		t.Fatalf("update: %+v %v", updated, err)
 	}
 	if err := otherRepo.Delete(ctx, second.ID); err != nil {

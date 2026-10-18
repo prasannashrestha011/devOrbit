@@ -20,6 +20,7 @@ import (
 
 type workspaceMemoryStore struct {
 	items map[uuid.UUID]*model.Workspace
+	deleteErr error
 }
 
 func (s *workspaceMemoryStore) Create(_ context.Context, item *model.Workspace) error {
@@ -53,6 +54,7 @@ func (s *workspaceMemoryStore) Update(ctx context.Context, id uuid.UUID, changes
 	return item, nil
 }
 func (s *workspaceMemoryStore) Delete(_ context.Context, id uuid.UUID) error {
+	if s.deleteErr != nil { return s.deleteErr }
 	if s.items[id] == nil {
 		return repository.ErrNotFound
 	}
@@ -131,6 +133,11 @@ func TestWorkspaceAPI(t *testing.T) {
 	if w := request(http.MethodGet, idPath, "", "test-token"); !strings.Contains(w.Body.String(), `"description":""`) {
 		t.Fatalf("description was not cleared: %s", w.Body.String())
 	}
+	store.deleteErr = repository.ErrConflict
+	if w := request(http.MethodDelete, idPath, "", "test-token"); w.Code != http.StatusConflict {
+		t.Fatalf("workspace delete conflict: %d %s", w.Code, w.Body.String())
+	}
+	store.deleteErr = nil
 	if w := request(http.MethodDelete, idPath, "", "test-token"); w.Code != http.StatusNoContent {
 		t.Fatalf("delete: %d %s", w.Code, w.Body.String())
 	}

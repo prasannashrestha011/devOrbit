@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/repository"
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/service"
 )
 
@@ -158,6 +159,10 @@ func writeOperationError(w http.ResponseWriter, err error) {
 	}
 	if service.IsNotFound(err) {
 		writeError(w, http.StatusNotFound, "not_found", "workspace not found")
+		return
+	}
+	if errors.Is(err, repository.ErrConflict) {
+		writeError(w, http.StatusConflict, "conflict", "workspace contains services")
 		return
 	}
 	writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")

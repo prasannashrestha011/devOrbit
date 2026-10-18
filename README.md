@@ -1,6 +1,6 @@
 # DevOrbit backend
 
-DevOrbit has a local Go API foundation and a Workspace Management module. The Go module lives at the repository root.
+DevOrbit has a local Go API with workspace and service configuration management. The Go module lives at the repository root.
 
 ## Requirements and setup
 
@@ -43,15 +43,32 @@ Path settings must be absolute. The process creates missing data and log directo
 - `GET /api/v1/workspaces` lists workspaces in creation order, with optional `limit` (1–100, default 50) and `offset` (nonnegative, default 0).
 - `GET /api/v1/workspaces/{id}` retrieves one workspace.
 - `PATCH /api/v1/workspaces/{id}` updates supplied `name`, `description`, or `root_path` fields; an empty description clears it.
-- `DELETE /api/v1/workspaces/{id}` permanently deletes a workspace.
+- `DELETE /api/v1/workspaces/{id}` permanently deletes an empty workspace; returns `409` while services remain.
+- `POST /api/v1/workspaces/{id}/services` creates a service configuration.
+- `GET /api/v1/workspaces/{id}/services` lists that workspace's services with the same `limit` and `offset` convention as workspaces.
+- `GET /api/v1/services/{id}` retrieves a service configuration.
+- `PATCH /api/v1/services/{id}` updates supplied configuration fields.
+- `DELETE /api/v1/services/{id}` permanently deletes a service configuration.
+
+All service routes require the same bearer token as workspace routes. An invalid request returns `400`, a missing workspace or service returns `404`, and a duplicate service name in one workspace returns `409`. Responses are JSON objects for a single service and JSON arrays for lists; successful deletes return `204` without a body. Errors use `{"error":{"code":"...","message":"..."}}`.
+
+Create a service under an existing workspace:
+
+```json
+{"name":"Go Backend","command":"go","args":["run","./cmd/api"],"working_directory":"backend","env":{"APP_ENV":"development"},"enabled":true,"auto_restart":false}
+```
+
+The response has the same fields plus `id`, `workspace_id`, `created_at`, and `updated_at`. `enabled` defaults to `true`, `auto_restart` to `false`, and omitted `args` and `env` to `[]` and `{}`. `PATCH` accepts any subset of `name`, `command`, `args`, `working_directory`, `env`, `enabled`, and `auto_restart`. Supplied `args` and `env` replace the complete array or map; for example `{"args":[],"env":{},"enabled":false}` clears both collections and disables the service. `null` and unknown fields are rejected.
+
+`command` is one executable name or path; arguments remain separate strings. Relative working directories are resolved under the workspace root, checked on the local filesystem, and stored as normalized relative paths when they remain inside that root. An empty value means the workspace root. Explicit absolute directories outside the root are stored as normalized absolute paths. No directory is created and no command runs during configuration. Environment overrides preserve key case and are stored as plaintext JSONB; do not put credentials there until secure secret management exists. A workspace must have all its services removed before it can be deleted.
 
 The token is generated once using a cryptographic random source and stored at `DEVORBIT_AUTH_TOKEN_PATH`. A future Electron main process should read it directly and keep it out of renderer code. Browser requests with an `Origin` header are accepted only from the API's own origin. No wildcard CORS policy is enabled. Requests are logged by method, path, status, and duration without query strings or authorization headers.
 
 ## Schema and generated queries
 
-Startup calls `database.Migrate` with the explicitly registered Workspace model. GORM AutoMigrate does not provide a safe general rollback or every schema evolution; review schema changes before upgrading a populated database.
+Startup calls `database.Migrate` with Workspace followed by Service. The `services` table uses PostgreSQL UUID keys, JSONB `args` and `env`, a workspace foreign key with restricted deletion, an index on `workspace_id`, and a unique index on `(workspace_id, name)`. GORM AutoMigrate does not provide a safe general rollback or every schema evolution; review schema changes before upgrading a populated database.
 
-After changing the Workspace model, run `go run ./cmd/gen` to regenerate `internal/dal/query`; do not edit generated files. The generator uses `ApplyBasic` on the Go model and does not require a live database. The application injects its DB into the workspace repository, which uses `query.Use(db)` for generated queries. Repository methods pass each request context to GORM Gen for cancellation and deadlines. A caller needing a transaction can construct a repository with that transaction.
+After changing either model, run `go generate ./...` to regenerate `internal/dal/query`; do not edit generated files. The generator uses `ApplyBasic` on the Go models and does not require a live database. The application injects its DB into repositories, which use `query.Use(db)` for generated queries. Repository methods pass each request context to GORM Gen for cancellation and deadlines. A caller needing a transaction can construct a repository with that transaction.
 
 Each module defines its endpoints in its own `routes` package. `internal/routes/routes.go` passes the authenticated `/api/v1` router to each module for registration.
 
@@ -59,10 +76,11 @@ Each module defines its endpoints in its own `routes` package. `internal/routes/
 
 ```sh
 go test ./...
+go test -race ./...
 go vet ./...
 go build -buildvcs=false ./cmd/devorbit
 ```
 
 Set `DEVORBIT_TEST_DATABASE_URL` to a separate PostgreSQL 17 database to run migration and repository integration tests. They create and drop only unique temporary schemas. Without that variable, these tests are skipped.
 
-Current limitations: no service CRUD, process supervisor, log streaming, SSE, or desktop UI. The log directory is prepared but file logging is not implemented; structured logs go to standard error.
+Current limitations: no process supervisor, log streaming, SSE, or desktop UI. Service configuration does not execute commands or implement automatic restart. The log directory is prepared but file logging is not implemented; structured logs go to standard error.

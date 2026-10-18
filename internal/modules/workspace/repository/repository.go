@@ -6,12 +6,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/prasannashrestha011/devOrbit/internal/dal/query"
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/model"
 	"gorm.io/gorm"
 )
 
 var ErrNotFound = errors.New("workspace not found")
+var ErrConflict = errors.New("workspace contains services")
 
 type Repository struct {
 	q *query.Query
@@ -52,6 +54,10 @@ func (r *Repository) Update(ctx context.Context, id uuid.UUID, changes map[strin
 func (r *Repository) Delete(ctx context.Context, id uuid.UUID) error {
 	result, err := r.q.Workspace.WithContext(ctx).Where(r.q.Workspace.ID.Eq(id)).Delete()
 	if err != nil {
+		var pg *pgconn.PgError
+		if errors.As(err, &pg) && pg.Code == "23503" {
+			return ErrConflict
+		}
 		return err
 	}
 	if result.RowsAffected == 0 {
