@@ -13,12 +13,6 @@ import (
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/model"
 )
 
-func TestRepositoryRequiresContextDatabase(t *testing.T) {
-	if _, err := New(context.Background()); err == nil {
-		t.Fatal("repository accepted context without database")
-	}
-}
-
 func TestWorkspacePostgres(t *testing.T) {
 	dsn := os.Getenv("DEVORBIT_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -66,10 +60,7 @@ func TestWorkspacePostgres(t *testing.T) {
 	if err := other.Exec("SET search_path TO " + schema).Error; err != nil {
 		t.Fatal(err)
 	}
-	repo, err := New(database.WithDB(ctx, db))
-	if err != nil {
-		t.Fatal(err)
-	}
+	repo := New(db)
 	first := &model.Workspace{ID: uuid.New(), Name: "first", RootPath: t.TempDir()}
 	second := &model.Workspace{ID: uuid.New(), Name: "second", RootPath: first.RootPath}
 	for _, item := range []*model.Workspace{first, second} {
@@ -77,10 +68,7 @@ func TestWorkspacePostgres(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	otherRepo, err := New(database.WithDB(ctx, other))
-	if err != nil {
-		t.Fatal(err)
-	}
+	otherRepo := New(other)
 	loaded, err := otherRepo.Get(ctx, first.ID)
 	if err != nil || loaded.Name != first.Name {
 		t.Fatalf("separate connection read: %+v %v", loaded, err)
@@ -106,10 +94,7 @@ func TestWorkspacePostgres(t *testing.T) {
 	if transaction.Error != nil {
 		t.Fatal(transaction.Error)
 	}
-	transactionRepo, err := New(database.WithDB(ctx, transaction))
-	if err != nil {
-		t.Fatal(err)
-	}
+	transactionRepo := New(transaction)
 	inside := &model.Workspace{ID: uuid.New(), Name: "inside", RootPath: first.RootPath}
 	if err := transactionRepo.Create(ctx, inside); err != nil {
 		t.Fatal(err)

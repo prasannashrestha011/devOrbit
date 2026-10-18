@@ -62,15 +62,15 @@ func (s *workspaceMemoryStore) Delete(_ context.Context, id uuid.UUID) error {
 
 func TestWorkspaceAPI(t *testing.T) {
 	store := &workspaceMemoryStore{items: make(map[uuid.UUID]*model.Workspace)}
-	svc := service.New(func(context.Context) (service.Store, error) { return store, nil })
+	svc := service.New(store)
 	c := controller.New(svc)
-	r := chi.NewRouter()
-	r.Post("/", c.Create)
-	r.Get("/", c.List)
-	r.Get("/{id}", c.Get)
-	r.Patch("/{id}", c.Update)
-	r.Delete("/{id}", c.Delete)
-	api := Router(slog.New(slog.NewTextHandler(io.Discard, nil)), "test-token", "http://127.0.0.1:7456", func(context.Context) error { return nil }, r)
+	api := Router(slog.New(slog.NewTextHandler(io.Discard, nil)), "test-token", "http://127.0.0.1:7456", func(context.Context) error { return nil }, func(router chi.Router) {
+		router.Post("/workspaces", c.Create)
+		router.Get("/workspaces", c.List)
+		router.Get("/workspaces/{id}", c.Get)
+		router.Patch("/workspaces/{id}", c.Update)
+		router.Delete("/workspaces/{id}", c.Delete)
+	})
 	request := func(method, path, body, token string) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequest(method, path, strings.NewReader(body))

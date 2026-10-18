@@ -7,7 +7,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prasannashrestha011/devOrbit/internal/dal/query"
-	"github.com/prasannashrestha011/devOrbit/internal/database"
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/model"
 	"gorm.io/gorm"
 )
@@ -18,13 +17,8 @@ type Repository struct {
 	q *query.Query
 }
 
-// New resolves the request's connection or transaction once, before any query.
-func New(ctx context.Context) (*Repository, error) {
-	db, err := database.FromContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return &Repository{q: query.Use(db.WithContext(ctx))}, nil
+func New(db *gorm.DB) *Repository {
+	return &Repository{q: query.Use(db)}
 }
 
 func (r *Repository) Create(ctx context.Context, workspace *model.Workspace) error {

@@ -45,7 +45,7 @@ func TestCreateValidationAndNormalization(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := &captureStore{}
-	svc := New(func(context.Context) (Store, error) { return store, nil })
+	svc := New(store)
 	for _, tc := range []struct {
 		name  string
 		input CreateInput

@@ -23,14 +23,12 @@ type Store interface {
 }
 
 type Service struct {
-	newStore func(context.Context) (Store, error)
+	store Store
 }
 
-func New(newStore func(context.Context) (Store, error)) *Service {
-	return &Service{newStore: newStore}
+func New(store Store) *Service {
+	return &Service{store: store}
 }
-
-func NewRepository(ctx context.Context) (Store, error) { return repository.New(ctx) }
 
 type ValidationError struct {
 	Field   string
@@ -63,32 +61,20 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*model.Workspa
 	if err != nil {
 		return nil, err
 	}
-	store, err := s.newStore(ctx)
-	if err != nil {
-		return nil, err
-	}
 	id, err := uuid.NewRandom()
 	if err != nil {
 		return nil, err
 	}
 	workspace := &model.Workspace{ID: id, Name: name, Description: input.Description, RootPath: root}
-	return workspace, store.Create(ctx, workspace)
+	return workspace, s.store.Create(ctx, workspace)
 }
 
 func (s *Service) Get(ctx context.Context, id uuid.UUID) (*model.Workspace, error) {
-	store, err := s.newStore(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return store.Get(ctx, id)
+	return s.store.Get(ctx, id)
 }
 
 func (s *Service) List(ctx context.Context, limit, offset int) ([]*model.Workspace, error) {
-	store, err := s.newStore(ctx)
-	if err != nil {
-		return nil, err
-	}
-	workspaces, err := store.List(ctx, limit, offset)
+	workspaces, err := s.store.List(ctx, limit, offset)
 	if workspaces == nil && err == nil {
 		workspaces = []*model.Workspace{}
 	}
@@ -120,19 +106,11 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, input PatchInput) (*
 	if len(changes) == 0 {
 		return nil, &ValidationError{Field: "body", Message: "at least one field is required"}
 	}
-	store, err := s.newStore(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return store.Update(ctx, id, changes)
+	return s.store.Update(ctx, id, changes)
 }
 
 func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
-	store, err := s.newStore(ctx)
-	if err != nil {
-		return err
-	}
-	return store.Delete(ctx, id)
+	return s.store.Delete(ctx, id)
 }
 
 func validateName(name string) (string, error) {
