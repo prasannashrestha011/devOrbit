@@ -7,25 +7,23 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 )
+
+func PrivateDirectory(path string) error { return privateDirectory(path) }
 
 func LoadOrCreateToken(path string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return "", errors.New("cannot create token directory")
 	}
-	if runtime.GOOS != "windows" {
-		info, err := os.Stat(filepath.Dir(path))
-		if err != nil || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
-			return "", errors.New("token directory must be private")
-		}
+	if err := privateDirectory(filepath.Dir(path)); err != nil {
+		return "", errors.New("token directory must be private")
 	}
 	var bytes [32]byte
 	if _, err := rand.Read(bytes[:]); err != nil {
 		return "", errors.New("cannot generate authentication token")
 	}
 	token := hex.EncodeToString(bytes[:])
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	f, err := createToken(path)
 	if err == nil {
 		if _, err = io.WriteString(f, token); err != nil {
 			_ = f.Close()
@@ -41,12 +39,13 @@ func LoadOrCreateToken(path string) (string, error) {
 	if !errors.Is(err, os.ErrExist) {
 		return "", errors.New("cannot create authentication token")
 	}
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || (runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0) {
+	f, err = openToken(path)
+	if err != nil {
 		return "", errors.New("authentication token file must be private and regular")
 	}
-	stored, err := os.ReadFile(path)
-	if err != nil || len(stored) != 64 {
+	stored, err := io.ReadAll(io.LimitReader(f, 65))
+	closeErr := f.Close()
+	if err != nil || closeErr != nil || len(stored) != 64 {
 		return "", errors.New("cannot read valid authentication token")
 	}
 	if _, err := hex.DecodeString(string(stored)); err != nil {
