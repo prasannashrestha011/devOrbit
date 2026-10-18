@@ -15,6 +15,7 @@ import (
 	"github.com/prasannashrestha011/devOrbit/internal/api"
 	"github.com/prasannashrestha011/devOrbit/internal/config"
 	"github.com/prasannashrestha011/devOrbit/internal/database"
+	serviceModel "github.com/prasannashrestha011/devOrbit/internal/modules/serviceconfiguration/model"
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/model"
 	"github.com/prasannashrestha011/devOrbit/internal/routes"
 	"github.com/prasannashrestha011/devOrbit/internal/security"
@@ -37,7 +38,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		return errors.New("database pool unavailable")
 	}
 	defer sqlDB.Close()
-	if err := database.Migrate(db, &model.Workspace{}); err != nil {
+	if err := database.Migrate(db, &model.Workspace{}, &serviceModel.Service{}); err != nil {
 		return err
 	}
 	token, err := security.LoadOrCreateToken(cfg.AuthTokenPath)
