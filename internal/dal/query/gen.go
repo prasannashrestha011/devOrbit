@@ -18,6 +18,7 @@ import (
 func Use(db *gorm.DB, opts ...gen.DOOption) *Query {
 	return &Query{
 		db:        db,
+		Service:   newService(db, opts...),
 		Workspace: newWorkspace(db, opts...),
 	}
 }
@@ -25,6 +26,7 @@ func Use(db *gorm.DB, opts ...gen.DOOption) *Query {
 type Query struct {
 	db *gorm.DB
 
+	Service   service
 	Workspace workspace
 }
 
@@ -35,6 +37,7 @@ func (q *Query) UnderlyingDB() *gorm.DB { return q.db }
 func (q *Query) clone(db *gorm.DB) *Query {
 	return &Query{
 		db:        db,
+		Service:   q.Service.clone(db),
 		Workspace: q.Workspace.clone(db),
 	}
 }
@@ -50,16 +53,19 @@ func (q *Query) WriteDB() *Query {
 func (q *Query) ReplaceDB(db *gorm.DB) *Query {
 	return &Query{
 		db:        db,
+		Service:   q.Service.replaceDB(db),
 		Workspace: q.Workspace.replaceDB(db),
 	}
 }
 
 type queryCtx struct {
+	Service   IServiceDo
 	Workspace IWorkspaceDo
 }
 
 func (q *Query) WithContext(ctx context.Context) *queryCtx {
 	return &queryCtx{
+		Service:   q.Service.WithContext(ctx),
 		Workspace: q.Workspace.WithContext(ctx),
 	}
 }
