@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/model"
+	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/validation"
 )
 
 type captureStore struct{ workspace *model.Workspace }
@@ -93,7 +94,7 @@ func TestRelativeRootPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	actual, err := normalizeRoot(relative)
+	actual, err := validation.Root(relative)
 	if err != nil {
 		t.Fatal(err)
 	}
