@@ -1,12 +1,15 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
@@ -20,7 +23,23 @@ type Config struct {
 }
 
 func Load() (Config, error) {
-	dataDir := os.Getenv("DEVORBIT_DATA_DIR")
+	fileValues, err := loadEnv()
+	if err != nil {
+		return Config{}, err
+	}
+	get := func(key string) string {
+		if val, set := os.LookupEnv(key); set {
+			return val
+		}
+		return fileValues[key]
+	}
+	value := func(key, fallback string) string {
+		if val := get(key); val != "" {
+			return val
+		}
+		return fallback
+	}
+	dataDir := get("DEVORBIT_DATA_DIR")
 	if dataDir == "" {
 		base, err := os.UserConfigDir()
 		if err != nil {
@@ -39,7 +58,7 @@ func Load() (Config, error) {
 	c := Config{
 		Host:            value("DEVORBIT_HOST", "127.0.0.1"),
 		Port:            port,
-		DatabaseURL:     os.Getenv("DEVORBIT_DATABASE_URL"),
+		DatabaseURL:     get("DEVORBIT_DATABASE_URL"),
 		DataDir:         dataDir,
 		LogDir:          value("DEVORBIT_LOG_DIR", filepath.Join(dataDir, "logs")),
 		ShutdownTimeout: timeout,
@@ -59,9 +78,16 @@ func Load() (Config, error) {
 	return c, nil
 }
 
-func value(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
+func loadEnv() (map[string]string, error) {
+	for _, path := range []string{filepath.Join("server", ".env"), ".env"} {
+		values, err := godotenv.Read(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", path, err)
+		}
+		return values, nil
 	}
-	return fallback
+	return nil, nil
 }
