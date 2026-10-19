@@ -20,4 +20,5 @@ func RegisterRoutes(r chi.Router, db *gorm.DB, supervisor *process.Supervisor) {
 	r.Post("/services/{id}/stop", c.Stop)
 	r.Post("/services/{id}/restart", c.Restart)
 	r.Get("/services/{id}/status", c.Status)
+	r.Get("/services/{id}/terminal/{execution}", c.Terminal)
 }

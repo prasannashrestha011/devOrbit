@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"runtime"
 
 	"github.com/google/uuid"
 	serviceconfig "github.com/prasannashrestha011/devOrbit/internal/modules/serviceconfiguration/service"
@@ -62,7 +63,7 @@ func (s *Service) configuration(ctx context.Context, id uuid.UUID) (process.Conf
 	if err != nil {
 		return process.Config{}, err
 	}
-	return process.Config{WorkspaceID: config.WorkspaceID, Command: config.Command, Args: config.Args, Dir: dir, Env: config.Env}, nil
+	return process.Config{WorkspaceID: config.WorkspaceID, Name: config.Name, Command: config.Command, Args: config.Args, Dir: dir, Env: config.Env, Interactive: true, Tmux: runtime.GOOS != "windows"}, nil
 }
 
 func (s *Service) Status(ctx context.Context, id uuid.UUID) (process.Status, error) {
@@ -70,6 +71,23 @@ func (s *Service) Status(ctx context.Context, id uuid.UUID) (process.Status, err
 		return process.Status{}, err
 	}
 	return s.supervisor.Status(id), nil
+}
+
+func (s *Service) Terminal(ctx context.Context, id, executionID uuid.UUID) (*process.Terminal, uuid.UUID, error) {
+	config, err := s.configs.Get(ctx, id)
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+	terminal, err := s.supervisor.Terminal(id, config.WorkspaceID, executionID)
+	return terminal, config.WorkspaceID, err
+}
+
+func (s *Service) TerminalInput(id, workspaceID, executionID uuid.UUID, data []byte) error {
+	return s.supervisor.TerminalInput(id, workspaceID, executionID, data)
+}
+
+func (s *Service) TerminalResize(id, workspaceID, executionID uuid.UUID, cols, rows uint16) error {
+	return s.supervisor.TerminalResize(id, workspaceID, executionID, cols, rows)
 }
 
 func IsNotFound(err error) bool { return serviceconfig.IsNotFound(err) || workspace.IsNotFound(err) }

@@ -1,12 +1,15 @@
 package controller
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +18,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 	"github.com/prasannashrestha011/devOrbit/internal/api"
 	"github.com/prasannashrestha011/devOrbit/internal/modules/process/service"
 	"github.com/prasannashrestha011/devOrbit/internal/modules/serviceconfiguration/model"
@@ -64,10 +68,90 @@ func (workspaceStore) Update(context.Context, uuid.UUID, map[string]any) (*works
 func (workspaceStore) Delete(context.Context, uuid.UUID) error { return nil }
 
 func TestHTTPChild(t *testing.T) {
+	if os.Getenv("DEVORBIT_HTTP_CHILD") == "input" {
+		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err == nil {
+			fmt.Print("ack:", strings.TrimSpace(line), "\r\n")
+		}
+		return
+	}
 	if os.Getenv("DEVORBIT_HTTP_CHILD") == "1" {
 		for {
 			time.Sleep(time.Second)
 		}
+	}
+}
+
+func TestServiceTerminalInputOverWebSocket(t *testing.T) {
+	self, err := filepath.Abs(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	wid, id := uuid.New(), uuid.New()
+	enabled := true
+	root := t.TempDir()
+	workspaces := workspaceStore{wid: {ID: wid, RootPath: root}}
+	configs := configStore{id: {ID: id, WorkspaceID: wid, Command: self, Args: []string{"-test.run=^TestHTTPChild$"}, Env: map[string]string{"DEVORBIT_HTTP_CHILD": "input"}, Enabled: &enabled}}
+	supervisor := process.New(50 * time.Millisecond)
+	t.Cleanup(func() { _ = supervisor.Shutdown(context.Background()) })
+	c := New(service.New(configService.New(configs, workspaces), workspaceService.New(workspaces), supervisor))
+	handler := api.Router(slog.New(slog.NewTextHandler(io.Discard, nil)), "token", "http://127.0.0.1:7456", func(context.Context) error { return nil }, func(r chi.Router) {
+		r.Get("/services/{id}/terminal/{execution}", c.Terminal)
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	status, err := c.service.Start(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/v1/services/" + id.String() + "/terminal/" + status.ExecutionID.String()
+	conn, _, err := websocket.DefaultDialer.Dial(endpoint, http.Header{"Authorization": {"Bearer token"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.WriteJSON(map[string]any{"type": "input", "data": "ping\r"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	var output string
+	for !strings.Contains(output, "ack:ping") {
+		var frame process.TerminalFrame
+		if err := conn.ReadJSON(&frame); err != nil {
+			t.Fatalf("reading terminal output: %v (%q)", err, output)
+		}
+		output += string(frame.Data)
+		if frame.Type == "stopped" {
+			t.Fatalf("service exited before reading input: %q", output)
+		}
+	}
+	if first, reply := strings.Index(output, "ping"), strings.Index(output, "ack:ping"); first < 0 || reply < first {
+		t.Fatalf("terminal did not echo visible input before the child response: %q", output)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	current, err := c.service.Status(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for current.State == process.Running && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+		current, err = c.service.Status(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if current.State != process.Exited {
+		t.Fatalf("service status after command exit: %s", current.State)
+	}
+	if err := conn.WriteJSON(map[string]any{"type": "input", "data": "pwd\r"}); err != nil {
+		t.Fatal(err)
+	}
+	for !strings.Contains(output, root) {
+		var frame process.TerminalFrame
+		if err := conn.ReadJSON(&frame); err != nil {
+			t.Fatalf("tmux shell did not accept command after service exit: %v (%q)", err, output)
+		}
+		output += string(frame.Data)
 	}
 }
 
@@ -160,5 +244,71 @@ func TestProcessAPI(t *testing.T) {
 	configs[id].Command = "missing-devorbit-executable"
 	if w := request(http.MethodPost, base+"/restart", "token"); w.Code != http.StatusBadRequest {
 		t.Fatalf("restart should use current config: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestTerminalWebSocketAuthenticationAndScope(t *testing.T) {
+	self, err := filepath.Abs(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	wid, id := uuid.New(), uuid.New()
+	enabled := true
+	workspaces := workspaceStore{wid: {ID: wid, RootPath: t.TempDir()}}
+	configs := configStore{id: {ID: id, WorkspaceID: wid, Command: self, Args: []string{"-test.run=^TestHTTPChild$"}, Env: map[string]string{"DEVORBIT_HTTP_CHILD": "1"}, Enabled: &enabled}}
+	supervisor := process.New(50 * time.Millisecond)
+	t.Cleanup(func() { _ = supervisor.Shutdown(context.Background()) })
+	c := New(service.New(configService.New(configs, workspaces), workspaceService.New(workspaces), supervisor))
+	handler := api.Router(slog.New(slog.NewTextHandler(io.Discard, nil)), "token", "http://127.0.0.1:7456", func(context.Context) error { return nil }, func(r chi.Router) {
+		r.Get("/services/{id}/terminal/{execution}", c.Terminal)
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	cfg := process.Config{WorkspaceID: wid, Command: self, Args: []string{"-test.run=^TestHTTPChild$"}, Env: map[string]string{"DEVORBIT_HTTP_CHILD": "1"}, Dir: workspaces[wid].RootPath}
+	status, err := supervisor.Start(id, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/v1/services/" + id.String() + "/terminal/" + status.ExecutionID.String()
+	dial := func(raw string, headers http.Header) (*websocket.Conn, int) {
+		t.Helper()
+		conn, response, err := websocket.DefaultDialer.Dial(raw, headers)
+		if err != nil && response == nil {
+			t.Fatal(err)
+		}
+		if response != nil {
+			defer response.Body.Close()
+			return conn, response.StatusCode
+		}
+		return conn, http.StatusSwitchingProtocols
+	}
+	if conn, code := dial(endpoint, nil); conn != nil || code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized: %d", code)
+	}
+	if conn, code := dial(endpoint, http.Header{"Authorization": {"Bearer token"}, "Origin": {"https://other.example"}}); conn != nil || code != http.StatusForbidden {
+		t.Fatalf("origin: %d", code)
+	}
+	headers := http.Header{"Authorization": {"Bearer token"}}
+	conn, code := dial(endpoint, headers)
+	if code != http.StatusSwitchingProtocols {
+		t.Fatalf("upgrade: %d", code)
+	}
+	if err := conn.WriteJSON(map[string]any{"type": "resize", "cols": 80, "rows": 24}); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteJSON(map[string]any{"type": "close"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	if supervisor.Status(id).State != process.Running {
+		t.Fatal("closing a viewer stopped its service")
+	}
+	stale, err := url.Parse(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale.Path = strings.Replace(stale.Path, status.ExecutionID.String(), uuid.NewString(), 1)
+	if conn, code := dial(stale.String(), headers); conn != nil || code != http.StatusConflict {
+		t.Fatalf("stale execution: %d", code)
 	}
 }
