@@ -19,9 +19,12 @@ import (
 	"github.com/prasannashrestha011/devOrbit/internal/logs"
 	serviceModel "github.com/prasannashrestha011/devOrbit/internal/modules/serviceconfiguration/model"
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/model"
+	workspaceRepo "github.com/prasannashrestha011/devOrbit/internal/modules/workspace/repository"
+	workspaceService "github.com/prasannashrestha011/devOrbit/internal/modules/workspace/service"
 	"github.com/prasannashrestha011/devOrbit/internal/process"
 	"github.com/prasannashrestha011/devOrbit/internal/routes"
 	"github.com/prasannashrestha011/devOrbit/internal/security"
+	"github.com/prasannashrestha011/devOrbit/internal/shellterminal"
 )
 
 func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
@@ -62,9 +65,10 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	}
 	supervisor := process.New(cfg.ShutdownTimeout, manager)
 	supervisor.SetBroker(broker)
+	terminals := shellterminal.New(workspaceService.New(workspaceRepo.New(db)), cfg.ShutdownTimeout)
 	server := &http.Server{
 		Addr:              address,
-		Handler:           localHost(address, api.Router(log, token, "http://"+address, sqlDB.PingContext, func(r chi.Router) { routes.Register(r, db, supervisor, manager, broker) })),
+		Handler:           localHost(address, api.Router(log, token, "http://"+address, sqlDB.PingContext, func(r chi.Router) { routes.Register(r, db, supervisor, manager, broker, terminals) })),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -80,7 +84,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	serveErr := serve(ctx, server, listener, cfg.ShutdownTimeout)
 	shutdownCtx, stop := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer stop()
-	processErr := supervisor.Shutdown(shutdownCtx)
+	processErr := errors.Join(supervisor.Shutdown(shutdownCtx), terminals.Shutdown(shutdownCtx))
 	logErr := manager.Close()
 	return errors.Join(serveErr, processErr, logErr)
 }

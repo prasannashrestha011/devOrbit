@@ -8,16 +8,21 @@ import (
 	logRoutes "github.com/prasannashrestha011/devOrbit/internal/modules/logs/routes"
 	processRoutes "github.com/prasannashrestha011/devOrbit/internal/modules/process/routes"
 	serviceRoutes "github.com/prasannashrestha011/devOrbit/internal/modules/serviceconfiguration/routes"
+	shellRoutes "github.com/prasannashrestha011/devOrbit/internal/modules/shellterminal/routes"
 	workspaceRoutes "github.com/prasannashrestha011/devOrbit/internal/modules/workspace/routes"
 	"github.com/prasannashrestha011/devOrbit/internal/process"
+	"github.com/prasannashrestha011/devOrbit/internal/shellterminal"
 	"gorm.io/gorm"
 )
 
 // Register passes the authenticated API router to each module.
-func Register(r chi.Router, db *gorm.DB, supervisor *process.Supervisor, manager *logs.Manager, broker *events.Broker) {
-	workspaceRoutes.RegisterRoutes(r, db, supervisor)
+func Register(r chi.Router, db *gorm.DB, supervisor *process.Supervisor, manager *logs.Manager, broker *events.Broker, terminals ...*shellterminal.Manager) {
+	workspaceRoutes.RegisterRoutes(r, db, supervisor, terminals...)
 	serviceRoutes.RegisterRoutes(r, db)
 	processRoutes.RegisterRoutes(r, db, supervisor)
 	logRoutes.RegisterRoutes(r, db, manager)
 	eventRoutes.RegisterRoutes(r, db, broker)
+	if len(terminals) > 0 {
+		shellRoutes.RegisterRoutes(r, terminals[0])
+	}
 }

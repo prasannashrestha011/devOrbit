@@ -10,13 +10,14 @@ import (
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/service"
 	"github.com/prasannashrestha011/devOrbit/internal/orchestration"
 	"github.com/prasannashrestha011/devOrbit/internal/process"
+	"github.com/prasannashrestha011/devOrbit/internal/shellterminal"
 	"gorm.io/gorm"
 )
 
-func RegisterRoutes(r chi.Router, db *gorm.DB, supervisor *process.Supervisor) {
+func RegisterRoutes(r chi.Router, db *gorm.DB, supervisor *process.Supervisor, terminals ...*shellterminal.Manager) {
 	workspaces := repository.New(db)
 	services := configRepo.New(db)
-	c := controller.New(service.New(workspaces))
+	c := controller.New(service.New(workspaces), terminals...)
 	lifecycle := processService.New(configService.New(services, workspaces), service.New(workspaces), supervisor)
 	o := controller.NewOrchestration(orchestration.New(workspaces, services, lifecycle, supervisor))
 	r.Post("/workspaces", c.Create)

@@ -11,11 +11,21 @@ import (
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/dto"
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/repository"
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/service"
+	"github.com/prasannashrestha011/devOrbit/internal/shellterminal"
 )
 
-type Controller struct{ service *service.Service }
+type Controller struct {
+	service   *service.Service
+	terminals *shellterminal.Manager
+}
 
-func New(s *service.Service) *Controller { return &Controller{service: s} }
+func New(s *service.Service, terminals ...*shellterminal.Manager) *Controller {
+	c := &Controller{service: s}
+	if len(terminals) > 0 {
+		c.terminals = terminals[0]
+	}
+	return c
+}
 
 func (c *Controller) Create(w http.ResponseWriter, r *http.Request) {
 	input, err := dto.DecodeCreate(r)
@@ -81,7 +91,13 @@ func (c *Controller) Delete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := c.service.Delete(r.Context(), id); err != nil {
+	var err error
+	if c.terminals != nil {
+		err = c.terminals.DeleteWorkspace(r.Context(), id)
+	} else {
+		err = c.service.Delete(r.Context(), id)
+	}
+	if err != nil {
 		writeOperationError(w, err)
 		return
 	}
@@ -109,6 +125,10 @@ func writeOperationError(w http.ResponseWriter, err error) {
 	}
 	if errors.Is(err, repository.ErrConflict) {
 		writeError(w, http.StatusConflict, "conflict", "workspace contains services")
+		return
+	}
+	if errors.Is(err, shellterminal.ErrHasSessions) {
+		writeError(w, http.StatusConflict, "conflict", "close workspace terminals before deleting the workspace")
 		return
 	}
 	writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
