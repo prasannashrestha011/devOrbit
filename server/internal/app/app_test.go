@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -35,5 +36,30 @@ func TestServeGracefulShutdown(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("server did not stop")
+	}
+}
+
+func TestLocalHostRejectsRebinding(t *testing.T) {
+	h := localHost("127.0.0.1:7456", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	for _, tc := range []struct {
+		host   string
+		status int
+	}{
+		{"127.0.0.1:7456", http.StatusNoContent},
+		{"evil.example:7456", http.StatusForbidden},
+		{"127.0.0.1:9999", http.StatusForbidden},
+		{"[::1]:7456", http.StatusForbidden},
+	} {
+		req, err := http.NewRequest(http.MethodGet, "http://"+tc.host+"/health", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != tc.status {
+			t.Fatalf("host %q: got %d", tc.host, w.Code)
+		}
 	}
 }

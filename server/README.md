@@ -2,6 +2,8 @@
 
 DevOrbit has a local Go API with workspace and service configuration management and an in-memory process supervisor. The Go module lives at the repository root.
 
+See the [backend architecture diagram](docs/architecture.md) for the module and data flows.
+
 ## Requirements and setup
 
 - Go 1.24

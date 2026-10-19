@@ -16,6 +16,9 @@ type processTree struct {
 }
 
 func newProcessTree(cmd *exec.Cmd) (*processTree, error) {
+	/*
+		setPgid seperates tenant process from dev orbit process
+	*/
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	return &processTree{}, nil
 }
