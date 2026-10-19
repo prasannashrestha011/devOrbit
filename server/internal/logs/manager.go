@@ -132,6 +132,7 @@ func (m *Manager) Begin(workspaceID, serviceID uuid.UUID) (*Capture, error) {
 	c := &Capture{manager: m, workspaceID: workspaceID, serviceID: serviceID, executionID: executionID, dir: dir, file: file, fileNumber: 1, queue: make(chan pending, 1024), done: make(chan struct{})}
 	c.Stdout = &streamWriter{capture: c, stream: "stdout"}
 	c.Stderr = &streamWriter{capture: c, stream: "stderr"}
+	c.Terminal = &streamWriter{capture: c, stream: "terminal"}
 	m.active[executionID] = serviceID
 	m.wg.Add(1)
 	go c.run()
@@ -179,9 +180,11 @@ func (m *Manager) add(e Entry) {
 		b.entries = b.entries[1:]
 	}
 	m.mu.Unlock()
-	m.events.Publish(events.Event{Type: events.LogCreated, Timestamp: e.Timestamp, WorkspaceID: e.WorkspaceID, ServiceID: e.ServiceID, ExecutionID: &e.ExecutionID, Data: map[string]any{
-		"stream": e.Stream, "sequence": e.Sequence, "message": e.Message,
-	}})
+	if m.events != nil {
+		m.events.Publish(events.Event{Type: events.LogCreated, Timestamp: e.Timestamp, WorkspaceID: e.WorkspaceID, ServiceID: e.ServiceID, ExecutionID: &e.ExecutionID, Data: map[string]any{
+			"stream": e.Stream, "sequence": e.Sequence, "message": e.Message,
+		}})
+	}
 }
 
 func (m *Manager) diagnostic(serviceID uuid.UUID, dropped, storage uint64) {
@@ -202,20 +205,20 @@ type pending struct {
 }
 
 type Capture struct {
-	Stdout, Stderr io.Writer
-	manager        *Manager
-	workspaceID    uuid.UUID
-	serviceID      uuid.UUID
-	executionID    uuid.UUID
-	dir            string
-	file           *os.File
-	fileNumber     int
-	fileSize       int64
-	sequence       uint64
-	queue          chan pending
-	done           chan struct{}
-	closeOnce      sync.Once
-	writeErr       error
+	Stdout, Stderr, Terminal io.Writer
+	manager                  *Manager
+	workspaceID              uuid.UUID
+	serviceID                uuid.UUID
+	executionID              uuid.UUID
+	dir                      string
+	file                     *os.File
+	fileNumber               int
+	fileSize                 int64
+	sequence                 uint64
+	queue                    chan pending
+	done                     chan struct{}
+	closeOnce                sync.Once
+	writeErr                 error
 }
 
 func (c *Capture) ExecutionID() uuid.UUID { return c.executionID }
@@ -290,6 +293,7 @@ func (c *Capture) Close() error {
 	c.closeOnce.Do(func() {
 		c.Stdout.(*streamWriter).close()
 		c.Stderr.(*streamWriter).close()
+		c.Terminal.(*streamWriter).close()
 		close(c.queue)
 	})
 	<-c.done
@@ -302,6 +306,8 @@ type streamWriter struct {
 	stream  string
 	partial []byte
 	closed  bool
+	escape  byte
+	cr      bool
 }
 
 func (w *streamWriter) Write(p []byte) (int, error) {
@@ -311,6 +317,9 @@ func (w *streamWriter) Write(p []byte) (int, error) {
 		return 0, io.ErrClosedPipe
 	}
 	n := len(p)
+	if w.stream == "terminal" {
+		p = w.readable(p)
+	}
 	for len(p) > 0 {
 		end := len(p)
 		if end > maxChunk-len(w.partial) {
@@ -330,6 +339,60 @@ func (w *streamWriter) Write(p []byte) (int, error) {
 	}
 	w.emit()
 	return n, nil
+}
+
+func (w *streamWriter) readable(p []byte) []byte {
+	text := make([]byte, 0, len(p))
+	for _, b := range p {
+		switch w.escape {
+		case 1:
+			if b == '[' {
+				w.escape = 2
+			} else if b == ']' {
+				w.escape = 3
+			} else {
+				w.escape = 0
+			}
+			continue
+		case 2:
+			if b >= 0x40 && b <= 0x7e {
+				w.escape = 0
+			}
+			continue
+		case 3:
+			if b == 7 {
+				w.escape = 0
+			} else if b == 27 {
+				w.escape = 4
+			}
+			continue
+		case 4:
+			if b == '\\' {
+				w.escape = 0
+			} else {
+				w.escape = 3
+			}
+			continue
+		}
+		if b == 27 {
+			w.escape = 1
+			continue
+		}
+		if b == '\r' {
+			text = append(text, '\n')
+			w.cr = true
+			continue
+		}
+		if b == '\n' && w.cr {
+			w.cr = false
+			continue
+		}
+		w.cr = false
+		if b >= 32 || b == '\n' || b == '\t' {
+			text = append(text, b)
+		}
+	}
+	return text
 }
 
 func (w *streamWriter) emit() {

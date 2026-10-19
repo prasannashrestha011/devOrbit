@@ -90,6 +90,41 @@ func TestCaptureHistoryAndPaging(t *testing.T) {
 	}
 }
 
+func TestTerminalLogIsReadableAcrossWrites(t *testing.T) {
+	m, err := New(privateTempDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	sid := uuid.New()
+	c, err := m.Begin(uuid.New(), sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range []string{"\x1b[3", "2mready\x1b[0m\r", "\n\x1b]0;secret title\x1b\\done\n"} {
+		if _, err := c.Terminal.Write([]byte(part)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := m.List(context.Background(), Filter{ServiceID: sid, Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output string
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].Stream != "terminal" {
+			t.Fatalf("stream: %q", entries[i].Stream)
+		}
+		output += entries[i].Message
+	}
+	if output != "ready\ndone\n" {
+		t.Fatalf("terminal log: %q", output)
+	}
+}
+
 func TestRejectsLogDirectorySymlinks(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "redirected")
 	if err := os.Symlink(t.TempDir(), base); err != nil {
