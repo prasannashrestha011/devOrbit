@@ -1,0 +1,9 @@
+# Service terminal workspace
+
+The selected workspace has one inline **Terminal** view. Its compact session strip lists configured services and independent shells with their current states and exit codes. Selecting a service replaces the visible xterm viewport and attaches to that service's existing terminal stream. It does not start another service or PTY. The viewport fills the space below the app header and session strip; leaving the view only detaches its viewer.
+
+On Unix, each service execution owns a private tmux server, a session named after the service, and one attached PTY. tmux mouse mode lets a click focus either split pane. The backend tracks the original service pane so Stop still interrupts the service after a developer switches focus. The terminal accepts tmux's normal prefix keys; the strip also offers vertical and horizontal split controls. After the service command exits, its status and exit code remain visible while the tmux pane becomes an interactive shell. Start or Restart replaces the previous execution and tmux session; Stop follows the existing lifecycle policy. Windows uses the existing direct PTY path and has no tmux splits.
+
+Independent workspace shells remain separate PTY sessions and appear in the same strip. Closing a shell tab explicitly stops that shell. Switching tabs, leaving the Terminal view, or closing the desktop viewer does not stop a session. Service output remains available in Logs; terminal scrollback is a short-lived screen view, and tmux retains its own screen while its server lives.
+
+The Tauri bridge continues to forward raw output, input, and resize to the Go supervisor. xterm.js handles ANSI rendering, cursor, selection, paste, and keyboard input. The active viewport fits its container and sends its dimensions when it attaches or changes size. The backend continues to validate workspace ownership, execution IDs, and input size.

@@ -9,6 +9,7 @@ flowchart TB
         Service["Service configuration"]
         Orchestration["Workspace orchestration"]
         Process["Process supervisor"]
+        Terminal["PTY terminal sessions"]
         Logs["Logs"]
         Events["Events / SSE"]
     end
@@ -16,13 +17,14 @@ flowchart TB
     API --> Workspace
     API --> Service
     API --> Process
+    API --> Terminal --> Process
     API --> Logs
     API --> Events
 
     Workspace --> Orchestration --> Process
     Process -- loads configuration --> Service
     Process --> Apps["Managed apps and workers"]
-    Apps -- stdout / stderr --> Logs
+    Apps -- PTY output --> Process --> Logs
     Process -- lifecycle events --> Events
     Logs -- log events --> Events
 
@@ -32,3 +34,5 @@ flowchart TB
 ```
 
 Workspace and service configurations live in PostgreSQL. Process state and live events stay in memory; logs are stored in local files. A worker is a managed service, not a separate DevOrbit module.
+
+Each service execution owns a PTY session. The Go API exposes its raw output, input, and resize through an authenticated WebSocket scoped to the service and execution ID. Tauri keeps the bearer token in Rust and forwards output to xterm.js through a channel. The supervisor drains output even without a viewer and retains 1 MiB for reconnect replay. New log entries use the merged, readable `terminal` stream; older `stdout` and `stderr` entries remain available.

@@ -1,22 +1,33 @@
 # DevOrbit backend
 
-DevOrbit has a local Go API with workspace and service configuration management and an in-memory process supervisor. The Go module lives at the repository root.
+DevOrbit has a local Go API with workspace and service configuration management and an in-memory process supervisor. The Go module lives in `server/`.
 
-See the [backend architecture diagram](docs/architecture.md) for the module and data flows.
+See the [backend architecture diagram](../docs/architecture.md) for the module and data flows.
 
 ## Requirements and setup
 
 - Go 1.24
 - A running PostgreSQL 17 server
 
-Create a PostgreSQL role and database for DevOrbit, then set `DEVORBIT_DATABASE_URL` to its connection string. For a local PostgreSQL instance, a typical setup is:
+To start PostgreSQL with Docker Compose from `server/`:
+
+```sh
+cp -n .env.example .env # set the same private password in both database entries
+docker compose up -d
+go run ./cmd/devorbit
+```
+
+Compose stores database files in a named volume and binds PostgreSQL to localhost. Use a URL-encoded password in `DEVORBIT_DATABASE_URL` if it contains URL-special characters.
+Compose reads `DEVORBIT_DB_PASSWORD` from `server/.env`; the Go server reads `DEVORBIT_DATABASE_URL` from the same file. Exported environment variables take precedence. When running from the repository root, the server also finds `server/.env`.
+
+If using an existing local PostgreSQL instance, create a role and database for DevOrbit, then set `DEVORBIT_DATABASE_URL` to its connection string:
 
 ```sql
 CREATE ROLE devorbit LOGIN PASSWORD 'choose-a-private-password';
 CREATE DATABASE devorbit OWNER devorbit;
 ```
 
-Run these as a PostgreSQL administrator. The `.env.example` file lists all settings; the application reads process environment variables and does not load `.env` files itself.
+Run these as a PostgreSQL administrator. The `.env.example` file lists all settings. The application reads a `.env` file if present, and exported environment variables take precedence.
 
 ```sh
 export DEVORBIT_DATABASE_URL='postgres://devorbit:your-password@127.0.0.1:5432/devorbit?sslmode=disable'
@@ -48,7 +59,11 @@ Path settings must be absolute. The process creates missing data and log directo
 - `POST /api/v1/workspaces/{id}/stop` stops active managed services in reverse creation order, including disabled services that are still running.
 - `GET /api/v1/workspaces/{id}/status` returns all registered services' runtime states and aggregate counts.
 - `PATCH /api/v1/workspaces/{id}` updates supplied `name`, `description`, or `root_path` fields; an empty description clears it.
-- `DELETE /api/v1/workspaces/{id}` permanently deletes an empty workspace; returns `409` while services remain.
+- `DELETE /api/v1/workspaces/{id}` permanently deletes an empty workspace; returns `409` while services or shell terminals remain.
+- `GET /api/v1/workspaces/{id}/terminals` lists that workspace's shell sessions, including exited sessions that have not been closed.
+- `POST /api/v1/workspaces/{id}/terminals` starts the default shell in the workspace root and returns its session. At most 16 sessions may exist per workspace.
+- `DELETE /api/v1/workspaces/{id}/terminals/{terminal_id}` stops and removes a shell session.
+- `GET /api/v1/workspaces/{id}/terminals/{terminal_id}/stream` upgrades to an authenticated WebSocket. It uses the same input, resize, close, sequence, replay, and gap frames as service terminals. Closing the WebSocket only detaches the viewer.
 - `POST /api/v1/workspaces/{id}/services` creates a service configuration.
 - `GET /api/v1/workspaces/{id}/services` lists that workspace's services with the same `limit` and `offset` convention as workspaces.
 - `GET /api/v1/services/{id}` retrieves a service configuration.
@@ -58,6 +73,7 @@ Path settings must be absolute. The process creates missing data and log directo
 - `POST /api/v1/services/{id}/stop` waits for termination and returns `200` with runtime status. Stopping an already terminated or never started registered service is safe.
 - `POST /api/v1/services/{id}/restart` stops the old process, reloads the saved configuration, and returns `200` after the replacement launches. A conflicting lifecycle operation returns `409`.
 - `GET /api/v1/services/{id}/status` returns the current session's runtime status; a service never started in this session is `stopped`.
+- `GET /api/v1/services/{id}/terminal/{execution_id}` upgrades to an authenticated WebSocket for that service execution. Send JSON `{"type":"input","data":"text"}`, `{"type":"resize","cols":80,"rows":24}`, or `{"type":"close"}`. Output frames contain a sequence number and base64 `data`; `?after=<sequence>` replays up to 1 MiB of recent output, with a `gap` frame if older bytes are gone.
 - `GET /api/v1/services/{id}/logs` returns the newest persisted process logs for a service.
 - `GET /api/v1/workspaces/{id}/logs` returns the newest persisted logs across that workspace's services.
 - `GET /api/v1/events` streams live process and log events with Server-Sent Events. Optional `workspace_id` and `service_id` query parameters filter the stream.
@@ -74,17 +90,19 @@ The response has the same fields plus `id`, `workspace_id`, `created_at`, and `u
 
 `command` is one executable name or path; arguments remain separate strings. Relative working directories are resolved under the workspace root, checked on the local filesystem, and stored as normalized relative paths when they remain inside that root. An empty value means the workspace root. Explicit absolute directories outside the root are stored as normalized absolute paths. No directory is created and no command runs during configuration. Environment overrides preserve key case and are stored as plaintext JSONB; do not put credentials there until secure secret management exists. Anyone who can edit service configurations can execute commands as the DevOrbit OS user. DevOrbit is not a process sandbox. A workspace must have all its services removed before it can be deleted.
 
-The token is generated once using a cryptographic random source and stored at `DEVORBIT_AUTH_TOKEN_PATH`. The token directory and file must be private; startup fails if their permissions or ACL cannot be verified. A future Electron main process should read the token directly, send it in the `Authorization: Bearer` header for REST and SSE requests, and keep it out of renderer code and URLs. Browser requests with an `Origin` header are accepted only from the API's own origin. No wildcard CORS policy is enabled. The server also requires the configured IP and port in the HTTP Host header. JSON write requests require `Content-Type: application/json` and have a 1 MiB body limit. Requests are logged by method, route pattern, status, and duration without query strings or authorization headers.
+The token is generated once using a cryptographic random source and stored at `DEVORBIT_AUTH_TOKEN_PATH`. The token directory and file must be private; startup fails if their permissions or ACL cannot be verified. The Tauri desktop host reads the token directly, sends it in the `Authorization: Bearer` header for REST and SSE requests, and keeps it out of renderer code and URLs. Browser requests with an `Origin` header are accepted only from the API's own origin. No wildcard CORS policy is enabled. The server also requires the configured IP and port in the HTTP Host header. JSON write requests require `Content-Type: application/json` and have a 1 MiB body limit. Requests are logged by method, route pattern, status, and duration without query strings or authorization headers.
 
 The process supervisor runs executables directly with their argument arrays, resolves working directories at start time, inherits the backend environment with service overrides, and tracks `stopped`, `starting`, `running`, `stopping`, `exited`, and `failed` states in memory. A `running` status means the OS started the process; it does not indicate application readiness. Exit code and timestamps are reported after the process ends. A failed or exited service may be started again. Runtime status resets when DevOrbit restarts.
 
-Each successful process start has a new `execution_id` in its runtime status. Standard output and standard error are captured separately as UTC-stamped JSONL entries under `DEVORBIT_LOG_DIR/services/<service-id>/<execution-id>/`. Entries contain workspace, service, execution, stream, timestamp, sequence, message, and an ID. Newlines, carriage returns, and ANSI controls are preserved as JSON-escaped text. Output without newlines is captured while the process runs; long output is divided into 16 KiB chunks without truncation. Read boundaries may split one line across entries. The per-service memory cache holds at most 500 entries and 2 MiB of message data. The bounded ingestion queue drops entries if persistence cannot keep up; the service log response includes `diagnostics.dropped_entries` and `diagnostics.storage_errors` for the current backend session.
+Each successful process start has a new `execution_id` in its runtime status and owns a PTY. On Linux and macOS, the backend creates a private tmux session named after the service and attaches that PTY to it. The desktop shows one inline terminal viewport for the selected workspace with a compact service-session switcher; switching reattaches to an existing stream. The reported PID is the original tmux pane's shell process. Developers can split tmux panes with its normal prefix keys or the viewport controls and click a pane to focus it; Stop still interrupts the original service pane. When the service command exits, status and logs close for that execution while the tmux pane becomes an interactive shell. Service Start or Restart replaces the previous tmux session. `tmux` must be installed; a missing executable causes service start to fail clearly. Windows continues to use a direct PTY and does not have the shell-after-exit behavior. New executions merge stdout and stderr into a readable `terminal` log stream under `DEVORBIT_LOG_DIR/services/<service-id>/<execution-id>/`; older `stdout` and `stderr` entries remain available. ANSI control sequences are removed from new terminal log entries, while the WebSocket sends raw terminal bytes. The PTY echoes normal typed input, so commands and other echoed text can also appear in service logs; programs can disable echo for sensitive prompts. Entries contain workspace, service, execution, stream, UTC timestamp, sequence, message, and an ID. Output without newlines is captured while the process runs; long output is divided into 16 KiB chunks without truncation. Read boundaries may split one line across entries. The per-service memory cache holds at most 500 entries and 2 MiB of message data. The bounded ingestion queue drops entries if persistence cannot keep up; the service log response includes `diagnostics.dropped_entries` and `diagnostics.storage_errors` for the current backend session.
+
+Shell terminals are independent of configured services. They use the user's default shell in the workspace root, stay running while the desktop view is closed, and retain up to 1 MiB of recent output in memory for reattachment. Exited sessions remain listed until deleted. Shell input and output are not written to service logs, and all shell sessions end when the backend shuts down. Creating a shell requires the same API token that permits service command execution; DevOrbit does not sandbox either kind of process.
 
 Log files rotate at 10 MiB, keep five files per execution, and retain at most 20 executions per service for seven days. Expired executions are removed at startup and when that service starts again. Log queries read persisted files, including after a backend restart. They accept `limit` (1–500, default 100) and `before` (the previous page's `next_cursor`); entries are returned newest first. Logs may contain secrets printed by child processes, so log retrieval requires the normal API token. Log retrieval scans the retained files and may be slower for large histories.
 
 The events endpoint uses the same bearer token and origin check as other API routes. Each SSE frame has `id`, `event`, and JSON `data` fields. The JSON envelope contains `id`, `type`, `timestamp`, `workspace_id`, `service_id`, optional `execution_id`, and event-specific `data`. Event types are `process.started`, `process.stopping`, `process.stopped`, `process.exited`, `process.failed`, `process.restarted`, and `log.created`. Process payloads contain state and available PID or exit code; log payloads contain the captured stream, sequence, and message. The connection sends a comment heartbeat every 15 seconds. Events are live only: reconnecting does not replay missed events. Use the persisted log endpoints for history. A client that cannot keep up is disconnected and may reconnect. Like persisted logs, streamed process output can contain secrets printed by child processes.
 
-Stop sends a graceful interrupt and waits up to `DEVORBIT_SHUTDOWN_TIMEOUT` (default `10s`), then forces termination. On Linux and macOS, each service starts in its own process group, and signals target that group, including descendants of launchers such as `go run` or `npm`. Intentionally detached descendants that leave the process group may survive. On Windows, DevOrbit attaches the child to a Job Object and terminates that job if graceful console control is unavailable or times out. Job assignment occurs just after process creation, so a child spawned in that brief interval may escape the job. Backend shutdown rejects new starts and restarts, then stops active services concurrently and waits for their direct processes to be reaped. Only one lifecycle operation can act on a service at a time; concurrent stop requests share the same result, while conflicting start or restart requests return `409`. `auto_restart` remains a stored setting and is not active.
+Stop sends a graceful interrupt and waits up to `DEVORBIT_SHUTDOWN_TIMEOUT` (default `10s`), then forces termination. On Linux and macOS, service Stop sends Ctrl+C to the tmux pane and force closes its tmux server if the service does not exit in time. Independent shell terminals still use their own process groups. Intentionally detached descendants may survive. On Windows, the ConPTY launcher assigns the child to a Job Object and cancels its context to terminate the tree when needed. Job assignment is best effort; if it fails, cancellation terminates only the direct child. Backend shutdown rejects new starts and restarts, then stops active services concurrently and waits for their direct processes to be reaped. Only one lifecycle operation can act on a service at a time; concurrent stop requests share the same result, while conflicting start or restart requests return `409`. `auto_restart` remains a stored setting and is not active.
 
 Workspace start and stop return `workspace_id`, `operation`, `total`, `succeeded`, `failed`, `skipped`, and ordered `results`. Start outcomes are `started`, `already_running`, `disabled`, `failed`, and `conflict`; stop outcomes are `stopped`, `already_stopped`, `failed`, and `conflict`. `succeeded` counts newly started or stopped services, `skipped` counts already running, already stopped, and disabled services, and `failed` counts both failures and lifecycle conflicts. One failure does not roll back or prevent attempts on other services. Per-service error text is generic; command and environment values are never returned. A concurrent workspace operation on the same workspace returns `409`; different workspaces may operate concurrently. Individual service requests may overlap and are resolved by the supervisor's per-service lifecycle rules.
 
@@ -111,4 +129,4 @@ go build -buildvcs=false ./cmd/devorbit
 
 Set `DEVORBIT_TEST_DATABASE_URL` to a separate PostgreSQL 17 database to run migration and repository integration tests. They create and drop only unique temporary schemas. Without that variable, these tests are skipped.
 
-Current limitations: there is no automatic restart or desktop UI. SSE events are in memory and have no replay after a disconnect or backend restart. Workspace orchestration does not resolve service dependencies or persist runtime state. Updating or deleting a service configuration does not stop an already running process. Backend structured logs still go to standard error; managed-process logs are stored separately in `DEVORBIT_LOG_DIR`.
+Current limitations: there is no automatic restart. SSE events are in memory and have no replay after a disconnect or backend restart. Workspace orchestration does not resolve service dependencies or persist runtime state. Updating or deleting a service configuration does not stop an already running process. Backend structured logs still go to standard error; managed-process logs are stored separately in `DEVORBIT_LOG_DIR`.
