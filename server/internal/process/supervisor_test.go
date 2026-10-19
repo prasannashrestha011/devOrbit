@@ -3,16 +3,19 @@ package process
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/phuslu/pty"
 	"github.com/prasannashrestha011/devOrbit/internal/events"
 	"github.com/prasannashrestha011/devOrbit/internal/logs"
 )
@@ -69,7 +72,7 @@ func TestLifecycleAndLogEvents(t *testing.T) {
 			break
 		}
 	}
-	if counts[events.ProcessStarted] != 1 || counts[events.LogCreated] != 3 || counts[events.ProcessExited] != 1 {
+	if counts[events.ProcessStarted] != 1 || counts[events.LogCreated] < 1 || counts[events.ProcessExited] != 1 {
 		t.Fatalf("unexpected event counts: %+v", counts)
 	}
 	waitState(t, s, sid, Exited)
@@ -129,6 +132,15 @@ func TestProcessHelper(t *testing.T) {
 		_, _ = os.Stdout.WriteString("stdout line\npartial")
 		_, _ = os.Stderr.WriteString("stderr line\r\n")
 		os.Exit(0)
+	case "interactive":
+		_, _ = os.Stdout.WriteString("\x1b[32mready\x1b[0m\n")
+		var input [64]byte
+		_, _ = os.Stdin.Read(input[:])
+		_, _ = os.Stdout.WriteString("ack\n")
+		os.Exit(0)
+	case "noisy":
+		_, _ = os.Stdout.WriteString(strings.Repeat("x", 2<<20))
+		os.Exit(0)
 	case "fail":
 		os.Exit(7)
 	case "env":
@@ -172,20 +184,314 @@ func TestSupervisorCapturesProcessOutput(t *testing.T) {
 	}
 	waitState(t, s, id, Exited)
 	entries, err := m.List(context.Background(), logs.Filter{ServiceID: id, Limit: 10})
-	if err != nil || len(entries) != 3 {
+	if err != nil || len(entries) == 0 {
 		t.Fatalf("entries = %+v, %v", entries, err)
 	}
-	streams := map[string]bool{}
-	for _, e := range entries {
+	var output string
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
 		if e.ExecutionID != status.ExecutionID || e.WorkspaceID != workspace {
 			t.Fatalf("wrong execution: %+v", e)
 		}
-		streams[e.Stream+":"+e.Message] = true
-	}
-	for _, expected := range []string{"stdout:stdout line\n", "stdout:partial", "stderr:stderr line\r\n"} {
-		if !streams[expected] {
-			t.Fatalf("missing %q: %+v", expected, streams)
+		if e.Stream != "terminal" {
+			t.Fatalf("unexpected stream: %+v", e)
 		}
+		output += e.Message
+	}
+	for _, expected := range []string{"stdout line", "partial", "stderr line"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("missing %q: %q", expected, output)
+		}
+	}
+}
+
+func TestTerminalInputResizeAndReplay(t *testing.T) {
+	m, err := logs.New(privateTempDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(50*time.Millisecond, m)
+	t.Cleanup(func() { _ = s.Shutdown(context.Background()); _ = m.Close() })
+	id, workspace := uuid.New(), uuid.New()
+	cfg := helperConfig(t, "interactive")
+	cfg.WorkspaceID = workspace
+	status, err := s.Start(id, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminal, err := s.Terminal(id, workspace, status.ExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames, gap, live, cancel := terminal.Subscribe(0)
+	defer cancel()
+	if gap {
+		t.Fatal("unexpected replay gap")
+	}
+	if err := s.TerminalResize(id, workspace, status.ExecutionID, 88, 24); err != nil {
+		t.Fatal(err)
+	}
+	if size, err := pty.GetSize(terminal.pty); err != nil || size.Cols != 88 || size.Rows != 24 {
+		t.Fatalf("size: %+v %v", size, err)
+	}
+	if err := s.TerminalInput(id, workspace, status.ExecutionID, []byte("secret\n")); err != nil {
+		t.Fatal(err)
+	}
+	var output string
+	for _, frame := range frames {
+		output += string(frame.Data)
+	}
+	deadline := time.After(5 * time.Second)
+	for !strings.Contains(output, "ack") {
+		select {
+		case frame, ok := <-live:
+			if !ok {
+				t.Fatalf("terminal closed without ack: %q", output)
+			}
+			output += string(frame.Data)
+		case <-deadline:
+			t.Fatalf("timed out waiting for output: %q", output)
+		}
+	}
+	if !strings.Contains(output, "\x1b[32mready") || strings.Contains(output, "secret") {
+		t.Fatalf("unexpected terminal output: %q", output)
+	}
+	waitState(t, s, id, Exited)
+	if err := s.TerminalInput(id, workspace, status.ExecutionID, []byte("x")); !errors.Is(err, ErrStaleTerminal) {
+		t.Fatalf("stale input: %v", err)
+	}
+	if _, err := s.Terminal(id, uuid.New(), status.ExecutionID); !errors.Is(err, ErrStaleTerminal) {
+		t.Fatalf("wrong workspace: %v", err)
+	}
+	entries, err := m.List(context.Background(), logs.Filter{ServiceID: id, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Message, "secret") {
+			t.Fatalf("input entered logs: %+v", entry)
+		}
+	}
+}
+
+func TestTmuxServiceKeepsShellWithoutLoggingShellInput(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is not installed")
+	}
+	m, err := logs.New(privateTempDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(50*time.Millisecond, m)
+	t.Cleanup(func() { _ = s.Shutdown(context.Background()); _ = m.Close() })
+	id, workspace := uuid.New(), uuid.New()
+	cfg := helperConfig(t, "logs")
+	cfg.WorkspaceID, cfg.Interactive, cfg.Tmux = workspace, true, true
+	cfg.Name = "API server"
+	status, err := s.Start(id, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, s, id, Exited)
+	s.mu.Lock()
+	tmux := s.entries[id].tmux
+	s.mu.Unlock()
+	if tmux.name != "API-server" {
+		t.Fatalf("tmux session name = %q", tmux.name)
+	}
+	terminal, err := s.Terminal(id, workspace, status.ExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, live, cancel := terminal.Subscribe(0)
+	defer cancel()
+	if err := s.TerminalInput(id, workspace, status.ExecutionID, []byte("echo after-service-marker\r")); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(5 * time.Second)
+	var output string
+	for strings.Count(output, "after-service-marker") < 2 {
+		select {
+		case frame := <-live:
+			output += string(frame.Data)
+		case <-deadline:
+			t.Fatalf("tmux shell did not respond: %q", output)
+		}
+	}
+	if err := s.TerminalInput(id, workspace, status.ExecutionID, []byte("\x02%")); err != nil {
+		t.Fatal(err)
+	}
+	until := time.Now().Add(3 * time.Second)
+	for {
+		panes, err := exec.Command(tmux.path, "-S", tmux.socket, "list-panes", "-t", tmux.name, "-F", "#{pane_id}").Output()
+		if err == nil && len(strings.Fields(string(panes))) == 2 {
+			break
+		}
+		if time.Now().After(until) {
+			t.Fatalf("tmux split did not create a second pane: %q (%v), output %q", panes, err, output)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	activePane := func() string {
+		pane, err := exec.Command(tmux.path, "-S", tmux.socket, "display-message", "-p", "-t", tmux.name, "#{pane_id}").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(pane))
+	}
+	otherPane := activePane()
+	if otherPane == tmux.pane {
+		t.Fatal("split did not focus its new pane")
+	}
+	for _, click := range []struct {
+		column int
+		want   string
+	}{{2, tmux.pane}, {75, otherPane}} {
+		mouse := fmt.Sprintf("\x1b[<0;%d;2M\x1b[<0;%d;2m", click.column, click.column)
+		if err := s.TerminalInput(id, workspace, status.ExecutionID, []byte(mouse)); err != nil {
+			t.Fatal(err)
+		}
+		until := time.Now().Add(2 * time.Second)
+		for activePane() != click.want {
+			if time.Now().After(until) {
+				t.Fatalf("mouse click at column %d did not focus pane %s", click.column, click.want)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	var foundStdout, foundStderr bool
+	for _, entry := range m.Recent(id) {
+		if strings.Contains(entry.Message, "stdout line") {
+			foundStdout = true
+		}
+		if strings.Contains(entry.Message, "stderr line") {
+			foundStderr = true
+		}
+		if strings.Contains(entry.Message, "after-service-marker") {
+			t.Fatalf("shell input leaked into service logs: %+v", entry)
+		}
+	}
+	if !foundStdout || !foundStderr {
+		t.Fatalf("fast service output was missed: stdout=%v stderr=%v", foundStdout, foundStderr)
+	}
+}
+
+func TestTmuxCtrlCLeavesServicePaneInteractive(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is not installed")
+	}
+	s := New(2 * time.Second)
+	t.Cleanup(func() { _ = s.Shutdown(context.Background()) })
+	id, workspace := uuid.New(), uuid.New()
+	cfg := helperConfig(t, "graceful")
+	cfg.WorkspaceID, cfg.Interactive, cfg.Tmux = workspace, true, true
+	cfg.Name = "dev-app"
+	cfg.Env["DEVORBIT_TEST_READY"] = filepath.Join(t.TempDir(), "ready")
+	cfg.Env["DEVORBIT_TEST_MARKER"] = filepath.Join(t.TempDir(), "stopped")
+	status, err := s.Start(id, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFile(t, cfg.Env["DEVORBIT_TEST_READY"])
+	terminal, err := s.Terminal(id, workspace, status.ExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, live, cancel := terminal.Subscribe(0)
+	defer cancel()
+	if err := s.TerminalInput(id, workspace, status.ExecutionID, []byte("\x03")); err != nil {
+		t.Fatal(err)
+	}
+	waitFile(t, cfg.Env["DEVORBIT_TEST_MARKER"])
+	waitState(t, s, id, Exited)
+	if err := s.TerminalInput(id, workspace, status.ExecutionID, []byte("echo after-interrupt-marker\r")); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(5 * time.Second)
+	var output string
+	for strings.Count(output, "after-interrupt-marker") < 2 {
+		select {
+		case frame, ok := <-live:
+			if !ok {
+				t.Fatalf("terminal closed after first Ctrl+C: %q", output)
+			}
+			output += string(frame.Data)
+		case <-deadline:
+			t.Fatalf("no shell after first Ctrl+C: %q", output)
+		}
+	}
+	if err := s.TerminalInput(id, workspace, status.ExecutionID, []byte("exit\r")); err != nil {
+		t.Fatal(err)
+	}
+	until := time.Now().Add(5 * time.Second)
+	for !terminal.Closed() && time.Now().Before(until) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !terminal.Closed() {
+		t.Fatal("shell did not close after second exit")
+	}
+}
+
+func TestTmuxStopTargetsServicePaneAfterSplit(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is not installed")
+	}
+	s := New(2 * time.Second)
+	t.Cleanup(func() { _ = s.Shutdown(context.Background()) })
+	id := uuid.New()
+	cfg := helperConfig(t, "graceful")
+	cfg.WorkspaceID = uuid.New()
+	cfg.Interactive, cfg.Tmux = true, true
+	cfg.Name = "API server"
+	cfg.Env["DEVORBIT_TEST_READY"] = filepath.Join(t.TempDir(), "ready")
+	cfg.Env["DEVORBIT_TEST_MARKER"] = filepath.Join(t.TempDir(), "marker")
+	status, err := s.Start(id, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFile(t, cfg.Env["DEVORBIT_TEST_READY"])
+	s.mu.Lock()
+	tmux := s.entries[id].tmux
+	s.mu.Unlock()
+	if err := s.TerminalInput(id, cfg.WorkspaceID, status.ExecutionID, []byte("\x02%")); err != nil {
+		t.Fatal(err)
+	}
+	until := time.Now().Add(3 * time.Second)
+	for {
+		panes, err := exec.Command(tmux.path, "-S", tmux.socket, "list-panes", "-t", tmux.name, "-F", "#{pane_id}").Output()
+		if err == nil && len(strings.Fields(string(panes))) == 2 {
+			break
+		}
+		if time.Now().After(until) {
+			t.Fatalf("tmux split did not create a second pane: %q (%v)", panes, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if stopped, err := s.Stop(context.Background(), id); err != nil || stopped.State != Stopped {
+		t.Fatalf("stop after split: %+v %v", stopped, err)
+	}
+	waitFile(t, cfg.Env["DEVORBIT_TEST_MARKER"])
+}
+
+func TestNoisyTerminalKeepsDrainingWithoutViewer(t *testing.T) {
+	s := New(50 * time.Millisecond)
+	t.Cleanup(func() { _ = s.Shutdown(context.Background()) })
+	id, workspace := uuid.New(), uuid.New()
+	cfg := helperConfig(t, "noisy")
+	cfg.WorkspaceID = workspace
+	status, err := s.Start(id, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, s, id, Exited)
+	terminal, err := s.Terminal(id, workspace, status.ExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames, gap, _, cancel := terminal.Subscribe(0)
+	defer cancel()
+	if !gap || len(frames) == 0 {
+		t.Fatalf("expected bounded replay gap: frames=%d gap=%v", len(frames), gap)
 	}
 }
 

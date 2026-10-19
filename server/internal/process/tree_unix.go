@@ -3,6 +3,7 @@
 package process
 
 import (
+	"context"
 	"errors"
 	"os/exec"
 	"sync"
@@ -16,10 +17,8 @@ type processTree struct {
 }
 
 func newProcessTree(cmd *exec.Cmd) (*processTree, error) {
-	/*
-		setPgid seperates tenant process from dev orbit process
-	*/
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// The PTY launcher creates a new session, whose leader is also the process group leader.
+	cmd.SysProcAttr = &syscall.SysProcAttr{}
 	return &processTree{}, nil
 }
 
@@ -51,3 +50,7 @@ func (t *processTree) close() {
 	t.closed = true
 	t.mu.Unlock()
 }
+
+func (t *processTree) context() context.Context { return context.Background() }
+
+func waitProcess(cmd *exec.Cmd) error { return cmd.Wait() }

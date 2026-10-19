@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/phuslu/pty"
 	"github.com/prasannashrestha011/devOrbit/internal/events"
 	"github.com/prasannashrestha011/devOrbit/internal/logs"
 )
@@ -38,10 +39,13 @@ func invalid(reason string) error { return fmt.Errorf("%w: %s", ErrInvalid, reas
 
 type Config struct {
 	WorkspaceID uuid.UUID
+	Name        string
 	Command     string
 	Args        []string
 	Dir         string
 	Env         map[string]string
+	Interactive bool
+	Tmux        bool
 }
 
 type Status struct {
@@ -61,7 +65,13 @@ type entry struct {
 	workspaceID uuid.UUID
 	cmd         *exec.Cmd
 	tree        *processTree
+	terminal    *Terminal
+	tmux        *tmuxSession
 	done        chan struct{}
+	serviceDone chan struct{}
+	serviceOnce sync.Once
+	watchStop   chan struct{}
+	watchDone   chan struct{}
 	op          string
 	opDone      *operation
 }
@@ -94,6 +104,9 @@ func New(grace time.Duration, manager ...*logs.Manager) *Supervisor {
 func (s *Supervisor) SetBroker(broker *events.Broker) { s.events = broker }
 
 func (s *Supervisor) publish(kind events.Type, e *entry) {
+	if s.events == nil {
+		return
+	}
 	data := map[string]any{"state": e.status.State}
 	if e.status.PID != nil {
 		data["pid"] = *e.status.PID
@@ -124,13 +137,27 @@ func (s *Supervisor) Closed() bool {
 	return s.closed
 }
 
+// Forget releases a completed execution and its terminal replay buffer.
+func (s *Supervisor) Forget(id uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if e := s.entries[id]; e != nil {
+		if e.cmd != nil || e.op != "" {
+			return ErrActive
+		}
+		delete(s.entries, id)
+	}
+	return nil
+}
+
 func (s *Supervisor) Start(id uuid.UUID, cfg Config) (Status, error) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
 		return Status{}, ErrClosed
 	}
-	if e := s.entries[id]; e != nil && (e.op != "" || e.cmd != nil) {
+	previous := s.entries[id]
+	if previous != nil && (previous.op != "" || previous.cmd != nil && (previous.tmux == nil || previous.status.State == Running || previous.status.State == Stopping)) {
 		s.mu.Unlock()
 		return Status{}, ErrActive
 	}
@@ -140,6 +167,10 @@ func (s *Supervisor) Start(id uuid.UUID, cfg Config) (Status, error) {
 	s.ops.Add(1)
 	s.mu.Unlock()
 	defer s.finish(e, nil)
+	if previous != nil && previous.tmux != nil && previous.cmd != nil {
+		previous.tmux.kill()
+		<-previous.done
+	}
 	return s.launch(e, cfg)
 }
 
@@ -151,21 +182,36 @@ func (s *Supervisor) launch(e *entry, cfg Config) (Status, error) {
 	if err != nil {
 		return s.failStart(e, err), err
 	}
+	var tmux *tmuxSession
+	if cfg.Tmux {
+		tmux, cmd, err = startTmux(cmd, cfg.Name)
+		if err != nil {
+			return s.failStart(e, err), err
+		}
+	}
 	tree, err := newProcessTree(cmd)
 	if err != nil {
+		if tmux != nil {
+			tmux.cleanup()
+		}
 		return s.failStart(e, err), err
 	}
 	var capture *logs.Capture
 	if s.logs != nil {
 		capture, err = s.logs.Begin(cfg.WorkspaceID, e.status.ServiceID)
 		if err != nil {
+			if tmux != nil {
+				tmux.cleanup()
+			}
 			tree.close()
 			return s.failStart(e, errors.New("log capture unavailable")), errors.New("log capture unavailable")
 		}
-		cmd.Stdout, cmd.Stderr = capture.Stdout, capture.Stderr
-		cmd.WaitDelay = 2 * time.Second
 	}
-	if err := cmd.Start(); err != nil {
+	ptmx, err := pty.StartWithSize(tree.context(), cmd, &pty.Winsize{Rows: 30, Cols: 100})
+	if err != nil {
+		if tmux != nil {
+			tmux.cleanup()
+		}
 		if capture != nil {
 			_ = capture.Close()
 		}
@@ -174,9 +220,29 @@ func (s *Supervisor) launch(e *entry, cfg Config) (Status, error) {
 		err = invalid("process launch failed")
 		return s.failStart(e, err), err
 	}
+	if !cfg.Interactive {
+		if err := makeTerminalRaw(ptmx); err != nil {
+			if tmux != nil {
+				tmux.cleanup()
+			}
+			_ = cmd.Process.Kill()
+			_ = waitProcess(cmd)
+			_ = ptmx.Close()
+			if capture != nil {
+				_ = capture.Close()
+			}
+			tree.close()
+			err = errors.New("terminal setup failed")
+			return s.failStart(e, err), err
+		}
+	}
 	if err := tree.attach(cmd); err != nil {
+		if tmux != nil {
+			tmux.cleanup()
+		}
 		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		_ = waitProcess(cmd)
+		_ = ptmx.Close()
 		if capture != nil {
 			_ = capture.Close()
 		}
@@ -184,14 +250,45 @@ func (s *Supervisor) launch(e *entry, cfg Config) (Status, error) {
 		err = errors.New("process ownership setup failed")
 		return s.failStart(e, err), err
 	}
+	terminal := newTerminal(ptmx, capture)
+	go terminal.drain()
+	if tmux != nil {
+		if err := tmux.start(); err != nil {
+			tmux.cleanup()
+			_ = tree.kill()
+			_ = waitProcess(cmd)
+			terminal.close()
+			if capture != nil {
+				_ = capture.Close()
+			}
+			tree.close()
+			return s.failStart(e, err), err
+		}
+	}
+	pid := cmd.Process.Pid
+	if tmux != nil {
+		if panePID, err := tmux.panePID(); err == nil {
+			pid = panePID
+		}
+	}
 	s.mu.Lock()
 	now := time.Now().UTC()
 	e.cmd = cmd
 	e.tree = tree
+	e.terminal = terminal
+	e.tmux = tmux
 	e.done = make(chan struct{})
-	e.status.PID = &cmd.Process.Pid
+	if tmux != nil {
+		e.serviceDone = make(chan struct{})
+		e.serviceOnce = sync.Once{}
+		e.watchStop = make(chan struct{})
+		e.watchDone = make(chan struct{})
+	}
+	e.status.PID = &pid
 	if capture != nil {
 		e.status.ExecutionID = capture.ExecutionID()
+	} else {
+		e.status.ExecutionID = uuid.New()
 	}
 	e.status.StartedAt = &now
 	e.status.UpdatedAt = now
@@ -203,6 +300,9 @@ func (s *Supervisor) launch(e *entry, cfg Config) (Status, error) {
 		s.publish(events.ProcessRestarted, e)
 	}
 	s.mu.Unlock()
+	if tmux != nil {
+		go s.watchTmux(e, tmux, capture)
+	}
 	go s.wait(e, cmd, tree, capture)
 	if closed {
 		return status, ErrClosed
@@ -226,25 +326,40 @@ func (s *Supervisor) failStart(e *entry, err error) Status {
 }
 
 func (s *Supervisor) wait(e *entry, cmd *exec.Cmd, tree *processTree, capture *logs.Capture) {
-	err := cmd.Wait()
+	err := waitProcess(cmd)
 	// A launcher such as go run may exit while its child is still in the owned tree.
 	_ = tree.kill()
 	tree.close()
+	e.terminal.close()
+	if e.watchStop != nil {
+		close(e.watchStop)
+		<-e.watchDone
+	}
 	if capture != nil {
 		_ = capture.Close()
+	}
+	code := cmd.ProcessState.ExitCode()
+	if e.tmux != nil {
+		if result, ok := e.tmux.result(); ok {
+			code = result
+		}
+		e.tmux.cleanup()
 	}
 	s.mu.Lock()
 	if s.entries[e.status.ServiceID] == e && e.cmd == cmd {
 		now := time.Now().UTC()
-		code := cmd.ProcessState.ExitCode()
-		e.status.ExitCode = &code
-		e.status.ExitedAt = &now
-		e.status.UpdatedAt = now
+		if e.status.State == Running || e.status.State == Stopping {
+			e.status.ExitCode = &code
+			e.status.ExitedAt = &now
+			e.status.UpdatedAt = now
+		}
 		if e.status.State == Stopping {
 			e.status.State = Stopped
 			e.status.LastError = ""
 			s.publish(events.ProcessStopped, e)
-		} else if err == nil {
+		} else if e.status.State != Running {
+			// The tmux shell may outlive the service; its exit does not change service status.
+		} else if err == nil && code == 0 {
 			e.status.State = Exited
 			s.publish(events.ProcessExited, e)
 		} else {
@@ -255,8 +370,54 @@ func (s *Supervisor) wait(e *entry, cmd *exec.Cmd, tree *processTree, capture *l
 		e.cmd = nil
 		e.tree = nil
 	}
+	e.serviceOnce.Do(func() {
+		if e.serviceDone != nil {
+			close(e.serviceDone)
+		}
+	})
 	close(e.done)
 	s.mu.Unlock()
+}
+
+func (s *Supervisor) watchTmux(e *entry, tmux *tmuxSession, capture *logs.Capture) {
+	defer close(e.watchDone)
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if code, ok := tmux.result(); ok {
+			e.terminal.stopCapture()
+			if capture != nil {
+				_ = capture.Close()
+			}
+			s.mu.Lock()
+			if s.entries[e.status.ServiceID] == e && (e.status.State == Running || e.status.State == Stopping) {
+				now := time.Now().UTC()
+				e.status.ExitCode = &code
+				e.status.ExitedAt = &now
+				e.status.UpdatedAt = now
+				if e.status.State == Stopping {
+					e.status.State = Stopped
+					s.publish(events.ProcessStopped, e)
+				} else if code == 0 {
+					e.status.State = Exited
+					s.publish(events.ProcessExited, e)
+				} else {
+					e.status.State = Failed
+					e.status.LastError = fmt.Sprintf("process exited with code %d", code)
+					s.publish(events.ProcessFailed, e)
+				}
+			}
+			e.serviceOnce.Do(func() { close(e.serviceDone) })
+			s.mu.Unlock()
+			_ = tmux.acknowledge()
+			return
+		}
+		select {
+		case <-ticker.C:
+		case <-e.watchStop:
+			return
+		}
+	}
 }
 
 func (s *Supervisor) finish(e *entry, err error) {
@@ -291,6 +452,18 @@ func (s *Supervisor) stop(ctx context.Context, id uuid.UUID, shutdown bool) (Sta
 		s.mu.Unlock()
 		return status, nil
 	}
+	if e.tmux != nil && e.status.State != Running && e.op == "" {
+		status := snapshot(e.status)
+		tmux, done := e.tmux, e.done
+		s.mu.Unlock()
+		tmux.kill()
+		select {
+		case <-done:
+			return status, nil
+		case <-ctx.Done():
+			return Status{}, ctx.Err()
+		}
+	}
 	if e.op == "stop" {
 		op := e.opDone
 		s.mu.Unlock()
@@ -321,23 +494,36 @@ func (s *Supervisor) stop(ctx context.Context, id uuid.UUID, shutdown bool) (Sta
 
 func (s *Supervisor) stopProcess(ctx context.Context, e *entry) error {
 	s.mu.Lock()
-	tree, done := e.tree, e.done
+	tree, done, tmux, serviceDone := e.tree, e.done, e.tmux, e.serviceDone
 	s.mu.Unlock()
 	if tree == nil {
 		return nil // The process completed between reserving the operation and stopping it.
 	}
-	err := tree.interrupt()
+	var err error
+	if tmux != nil {
+		err = tmux.interrupt()
+	} else {
+		err = tree.interrupt()
+	}
 	if errors.Is(err, errGraceUnavailable) {
 		err = nil
 	} else if err == nil {
 		timer := time.NewTimer(s.grace)
 		defer timer.Stop()
 		select {
-		case <-done:
+		case <-func() <-chan struct{} {
+			if tmux != nil {
+				return serviceDone
+			}
+			return done
+		}():
 			return nil
 		case <-timer.C:
 		case <-ctx.Done():
 		}
+	}
+	if tmux != nil {
+		tmux.kill()
 	}
 	if killErr := tree.kill(); killErr != nil {
 		return errors.Join(err, killErr)
@@ -362,7 +548,8 @@ func (s *Supervisor) Restart(ctx context.Context, id uuid.UUID, load func(contex
 		s.entries[id] = e
 	}
 	e.op = "restart"
-	running := e.cmd != nil
+	running := e.cmd != nil && e.status.State == Running
+	attachedTmux := e.cmd != nil && e.tmux != nil
 	if running {
 		e.status.State = Stopping
 		e.status.UpdatedAt = time.Now().UTC()
@@ -375,6 +562,10 @@ func (s *Supervisor) Restart(ctx context.Context, id uuid.UUID, load func(contex
 		if err := s.stopProcess(ctx, e); err != nil {
 			return s.Status(id), err
 		}
+	}
+	if attachedTmux {
+		e.tmux.kill()
+		<-e.done
 	}
 	if err := ctx.Err(); err != nil {
 		return s.Status(id), err
