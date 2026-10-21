@@ -21,9 +21,9 @@ import (
 	workspaceRepo "github.com/prasannashrestha011/devOrbit/internal/modules/workspace/repository"
 )
 
-type services map[uuid.UUID]*serviceModel.Service
+type services map[uuid.UUID]*serviceModel.Identity
 
-func (s services) Get(_ context.Context, id uuid.UUID) (*serviceModel.Service, error) {
+func (s services) Identity(_ context.Context, id uuid.UUID) (*serviceModel.Identity, error) {
 	if item := s[id]; item != nil {
 		return item, nil
 	}

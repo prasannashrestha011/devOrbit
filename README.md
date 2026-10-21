@@ -2,6 +2,8 @@
 
 DevOrbit runs local project services through a Go backend and a React/Tauri desktop window. The backend manages processes, persists logs, and owns the API and bearer token. The development script starts both processes; the desktop app does not bundle the backend yet.
 
+Creating a workspace creates `.devorbit/workspace.yaml` in its project root. Add services in the desktop UI, import a YAML file in the Workspace YAML editor, or edit that file directly. DevOrbit validates the file before saving or starting services. PostgreSQL stores workspace metadata and stable service IDs, while YAML is the only service configuration source.
+
 ## Run locally
 
 You need Go 1.24, PostgreSQL 17, Node.js, npm, Rust/Cargo, and the [Tauri system prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS. On Linux and macOS, install `tmux` for interactive service terminals. Set up the database as described in the [backend README](server/README.md).

@@ -12,7 +12,7 @@ import (
 )
 
 func RegisterRoutes(r chi.Router, db *gorm.DB, broker *events.Broker) {
-	workspaces := workspaceService.New(workspaceRepo.New(db))
+	workspaces := workspaceService.New(workspaceRepo.New(db), "")
 	services := serviceService.New(serviceRepo.New(db), workspaceRepo.New(db))
 	r.Get("/events", controller.New(broker, services, workspaces).Stream)
 }

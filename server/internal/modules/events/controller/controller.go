@@ -17,7 +17,7 @@ import (
 )
 
 type serviceLookup interface {
-	Get(context.Context, uuid.UUID) (*serviceModel.Service, error)
+	Identity(context.Context, uuid.UUID) (*serviceModel.Identity, error)
 }
 
 type workspaceLookup interface {
@@ -58,7 +58,7 @@ func (c *Controller) Stream(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
-		service, err := c.services.Get(r.Context(), id)
+		service, err := c.services.Identity(r.Context(), id)
 		if err != nil {
 			writeLookupError(w, serviceconfig.IsNotFound(err), "service")
 			return

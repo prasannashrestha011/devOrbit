@@ -3,12 +3,15 @@ package service
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 
 	"github.com/google/uuid"
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/dto"
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/model"
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/repository"
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/validation"
+	"github.com/prasannashrestha011/devOrbit/internal/workspaceconfig"
 )
 
 type Store interface {
@@ -20,11 +23,12 @@ type Store interface {
 }
 
 type Service struct {
-	store Store
+	store   Store
+	dataDir string
 }
 
-func New(store Store) *Service {
-	return &Service{store: store}
+func New(store Store, dataDir string) *Service {
+	return &Service{store: store, dataDir: dataDir}
 }
 
 type ValidationError = validation.Error
@@ -39,16 +43,33 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*model.Workspa
 	if err := validation.Description(input.Description); err != nil {
 		return nil, err
 	}
-	root, err := validation.Root(input.RootPath)
-	if err != nil {
-		return nil, err
-	}
 	id, err := uuid.NewRandom()
 	if err != nil {
 		return nil, err
 	}
+	if !filepath.IsAbs(s.dataDir) {
+		return nil, errors.New("workspace data directory is unavailable")
+	}
+	root := filepath.Join(s.dataDir, "workspaces", id.String())
+	if err := os.MkdirAll(filepath.Dir(root), 0700); err != nil {
+		return nil, err
+	}
+	if err := os.Mkdir(root, 0700); err != nil {
+		return nil, err
+	}
 	workspace := &model.Workspace{ID: id, Name: name, Description: input.Description, RootPath: root}
-	return workspace, s.store.Create(ctx, workspace)
+	if _, err := workspaceconfig.Write(root, []byte("services: {}\n"), ""); err != nil {
+		_ = os.Remove(filepath.Join(root, ".devorbit"))
+		_ = os.Remove(root)
+		return nil, err
+	}
+	if err := s.store.Create(ctx, workspace); err != nil {
+		_ = os.Remove(workspaceconfig.Path(root))
+		_ = os.Remove(filepath.Join(root, ".devorbit"))
+		_ = os.Remove(root)
+		return nil, err
+	}
+	return workspace, nil
 }
 
 func (s *Service) Get(ctx context.Context, id uuid.UUID) (*model.Workspace, error) {
@@ -78,13 +99,6 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, input PatchInput) (*
 		}
 		changes["description"] = *input.Description
 	}
-	if input.RootPath != nil {
-		root, err := validation.Root(*input.RootPath)
-		if err != nil {
-			return nil, err
-		}
-		changes["root_path"] = root
-	}
 	if len(changes) == 0 {
 		return nil, &ValidationError{Field: "body", Message: "at least one field is required"}
 	}
@@ -92,7 +106,46 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, input PatchInput) (*
 }
 
 func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
-	return s.store.Delete(ctx, id)
+	workspace, err := s.store.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	for offset := 0; ; offset += 100 {
+		items, err := s.store.List(ctx, 100, offset)
+		if err != nil {
+			return err
+		}
+		for _, item := range items {
+			if item.ID != id && item.RootPath == workspace.RootPath {
+				return s.store.Delete(ctx, id)
+			}
+		}
+		if len(items) < 100 {
+			break
+		}
+	}
+	snapshot, err := workspaceconfig.Read(workspace.RootPath)
+	missing := errors.Is(err, os.ErrNotExist)
+	if err != nil && !missing {
+		return err
+	}
+	if !missing {
+		if err := workspaceconfig.Remove(workspace.RootPath, snapshot.Revision); err != nil {
+			return err
+		}
+	}
+	if err := s.store.Delete(ctx, id); err != nil {
+		if !missing {
+			_, restoreErr := workspaceconfig.Write(workspace.RootPath, []byte(snapshot.Content), "")
+			return errors.Join(err, restoreErr)
+		}
+		return err
+	}
+	if workspace.RootPath == filepath.Join(s.dataDir, "workspaces", id.String()) {
+		_ = os.Remove(filepath.Join(workspace.RootPath, ".devorbit"))
+		_ = os.Remove(workspace.RootPath)
+	}
+	return nil
 }
 
 func IsNotFound(err error) bool { return errors.Is(err, repository.ErrNotFound) }

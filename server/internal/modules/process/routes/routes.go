@@ -13,7 +13,7 @@ import (
 )
 
 func RegisterRoutes(r chi.Router, db *gorm.DB, supervisor *process.Supervisor) {
-	workspaces := workspaceService.New(workspaceRepo.New(db))
+	workspaces := workspaceService.New(workspaceRepo.New(db), "")
 	configs := configService.New(serviceconfig.New(db), workspaceRepo.New(db))
 	c := controller.New(service.New(configs, workspaces, supervisor))
 	r.Post("/services/{id}/start", c.Start)

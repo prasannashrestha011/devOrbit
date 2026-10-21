@@ -2,8 +2,6 @@ package validation
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"unicode/utf8"
 )
@@ -28,23 +26,4 @@ func Description(description string) error {
 		return &Error{Field: "description", Message: "must contain at most 1000 characters"}
 	}
 	return nil
-}
-
-func Root(root string) (string, error) {
-	if strings.TrimSpace(root) == "" {
-		return "", &Error{Field: "root_path", Message: "must be an existing directory"}
-	}
-	absolute, err := filepath.Abs(root)
-	if err != nil {
-		return "", &Error{Field: "root_path", Message: "invalid directory path"}
-	}
-	canonical, err := filepath.EvalSymlinks(absolute)
-	if err != nil {
-		return "", &Error{Field: "root_path", Message: "must be an accessible existing directory"}
-	}
-	info, err := os.Stat(canonical)
-	if err != nil || !info.IsDir() {
-		return "", &Error{Field: "root_path", Message: "must be an accessible existing directory"}
-	}
-	return filepath.Clean(canonical), nil
 }

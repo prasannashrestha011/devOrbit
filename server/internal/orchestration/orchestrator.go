@@ -53,8 +53,9 @@ type OperationResult struct {
 }
 
 type ServiceStatus struct {
-	Name    string `json:"name"`
-	Enabled bool   `json:"enabled"`
+	Name           string `json:"name"`
+	Enabled        bool   `json:"enabled"`
+	ListeningPorts []int  `json:"listening_ports"`
 	process.Status
 }
 
@@ -110,22 +111,15 @@ func (o *Orchestrator) load(ctx context.Context, id uuid.UUID) (*workspace.Works
 	if err != nil {
 		return nil, nil, err
 	}
-	services := make([]*model.Service, 0)
-	for offset := 0; ; offset += 100 {
-		page, err := o.services.List(ctx, id, 100, offset)
-		if err != nil {
-			return nil, nil, err
-		}
-		services = append(services, page...)
-		if len(page) < 100 {
-			break
-		}
+	services, err := o.services.List(ctx, id, 1<<30, 0)
+	if err != nil {
+		return nil, nil, err
 	}
 	sort.Slice(services, func(i, j int) bool {
-		if !services[i].CreatedAt.Equal(services[j].CreatedAt) {
-			return services[i].CreatedAt.Before(services[j].CreatedAt)
+		if services[i].Name == services[j].Name {
+			return services[i].ID.String() < services[j].ID.String()
 		}
-		return services[i].ID.String() < services[j].ID.String()
+		return services[i].Name < services[j].Name
 	})
 	return w, services, nil
 }
@@ -189,10 +183,14 @@ func (o *Orchestrator) StopWorkspace(ctx context.Context, id uuid.UUID) (Operati
 		return OperationResult{}, err
 	}
 	defer o.release(id)
-	_, services, err := o.load(ctx, id)
-	if err != nil {
+	if _, err := o.workspaces.Get(ctx, id); err != nil {
 		return OperationResult{}, err
 	}
+	_, services, err := o.load(ctx, id)
+	if err != nil {
+		services = nil
+	}
+	services = o.withActive(id, services)
 	result := OperationResult{WorkspaceID: id, Operation: "stop", Total: len(services), Results: make([]ServiceResult, 0, len(services))}
 	for i := len(services) - 1; i >= 0; i-- {
 		if err := ctx.Err(); err != nil {
@@ -246,6 +244,7 @@ func (o *Orchestrator) GetWorkspaceStatus(ctx context.Context, id uuid.UUID) (Wo
 	if err != nil {
 		return WorkspaceStatus{}, err
 	}
+	services = o.withActive(id, services)
 	result := WorkspaceStatus{WorkspaceID: id, WorkspaceName: w.Name, TotalServices: len(services), Services: make([]ServiceStatus, 0, len(services))}
 	enabledRunning := 0
 	for _, item := range services {
@@ -254,7 +253,11 @@ func (o *Orchestrator) GetWorkspaceStatus(ctx context.Context, id uuid.UUID) (Wo
 			status.LastError = "service execution failed"
 		}
 		isEnabled := enabled(item)
-		result.Services = append(result.Services, ServiceStatus{Name: item.Name, Enabled: isEnabled, Status: status})
+		serviceStatus := ServiceStatus{Name: item.Name, Enabled: isEnabled, Status: status}
+		if status.State == process.Running && status.PID != nil {
+			serviceStatus.ListeningPorts = process.ListeningPorts(*status.PID)
+		}
+		result.Services = append(result.Services, serviceStatus)
 		if isEnabled {
 			result.EnabledServices++
 		}
@@ -287,4 +290,27 @@ func (o *Orchestrator) GetWorkspaceStatus(ctx context.Context, id uuid.UUID) (Wo
 		result.AggregateState = "idle"
 	}
 	return result, nil
+}
+
+func (o *Orchestrator) withActive(id uuid.UUID, services []*model.Service) []*model.Service {
+	provider, ok := o.runtime.(interface {
+		WorkspaceStatuses(uuid.UUID) []process.Status
+	})
+	if !ok {
+		return services
+	}
+	seen := make(map[uuid.UUID]bool, len(services))
+	for _, item := range services {
+		seen[item.ID] = true
+	}
+	for _, status := range provider.WorkspaceStatuses(id) {
+		if seen[status.ServiceID] {
+			continue
+		}
+		if status.State != process.Running && status.State != process.Starting && status.State != process.Stopping {
+			continue
+		}
+		services = append(services, &model.Service{ID: status.ServiceID, WorkspaceID: id, Name: status.ServiceID.String()})
+	}
+	return services
 }

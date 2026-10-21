@@ -32,7 +32,7 @@ func (s *Service) Start(ctx context.Context, id uuid.UUID) (process.Status, erro
 }
 
 func (s *Service) Stop(ctx context.Context, id uuid.UUID) (process.Status, error) {
-	if _, err := s.configs.Get(ctx, id); err != nil {
+	if _, err := s.configs.Identity(ctx, id); err != nil {
 		return process.Status{}, err
 	}
 	return s.supervisor.Stop(ctx, id)
@@ -67,14 +67,14 @@ func (s *Service) configuration(ctx context.Context, id uuid.UUID) (process.Conf
 }
 
 func (s *Service) Status(ctx context.Context, id uuid.UUID) (process.Status, error) {
-	if _, err := s.configs.Get(ctx, id); err != nil {
+	if _, err := s.configs.Identity(ctx, id); err != nil {
 		return process.Status{}, err
 	}
 	return s.supervisor.Status(id), nil
 }
 
 func (s *Service) Terminal(ctx context.Context, id, executionID uuid.UUID) (*process.Terminal, uuid.UUID, error) {
-	config, err := s.configs.Get(ctx, id)
+	config, err := s.configs.Identity(ctx, id)
 	if err != nil {
 		return nil, uuid.Nil, err
 	}

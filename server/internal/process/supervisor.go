@@ -131,6 +131,18 @@ func (s *Supervisor) Status(id uuid.UUID) Status {
 	return Status{ServiceID: id, State: Stopped}
 }
 
+func (s *Supervisor) WorkspaceStatuses(workspaceID uuid.UUID) []Status {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var statuses []Status
+	for _, e := range s.entries {
+		if e.workspaceID == workspaceID {
+			statuses = append(statuses, snapshot(e.status))
+		}
+	}
+	return statuses
+}
+
 func (s *Supervisor) Closed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -5,8 +5,9 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
-	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -18,63 +19,26 @@ import (
 	"github.com/prasannashrestha011/devOrbit/internal/modules/serviceconfiguration/service"
 	workspaceModel "github.com/prasannashrestha011/devOrbit/internal/modules/workspace/model"
 	workspaceRepository "github.com/prasannashrestha011/devOrbit/internal/modules/workspace/repository"
+	"github.com/prasannashrestha011/devOrbit/internal/workspaceconfig"
 )
 
-type apiStore struct{ items map[uuid.UUID]*model.Service }
+type apiStore struct{ items map[uuid.UUID]*model.Identity }
 
-func (s *apiStore) Create(_ context.Context, item *model.Service) error {
-	s.items[item.ID] = item
-	return nil
-}
-func (s *apiStore) Get(_ context.Context, id uuid.UUID) (*model.Service, error) {
+func (s *apiStore) Identity(_ context.Context, id uuid.UUID) (*model.Identity, error) {
 	if item := s.items[id]; item != nil {
 		return item, nil
 	}
 	return nil, repository.ErrNotFound
 }
-func (s *apiStore) List(_ context.Context, wid uuid.UUID, _, _ int) ([]*model.Service, error) {
-	items := []*model.Service{}
+func (s *apiStore) Resolve(_ context.Context, wid uuid.UUID, key string) (*model.Identity, error) {
 	for _, item := range s.items {
-		if item.WorkspaceID == wid {
-			items = append(items, item)
+		if item.WorkspaceID == wid && item.Key == key {
+			return item, nil
 		}
 	}
-	return items, nil
-}
-func (s *apiStore) Update(ctx context.Context, id uuid.UUID, changes map[string]any) (*model.Service, error) {
-	item, err := s.Get(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if value, ok := changes["enabled"]; ok {
-		item.Enabled = new(bool)
-		*item.Enabled = value.(bool)
-	}
-	if value, ok := changes["auto_restart"]; ok {
-		item.AutoRestart = value.(bool)
-	}
-	if value, ok := changes["args"]; ok {
-		_ = json.Unmarshal([]byte(value.(string)), &item.Args)
-	}
-	if value, ok := changes["env"]; ok {
-		_ = json.Unmarshal([]byte(value.(string)), &item.Env)
-	}
+	item := &model.Identity{ID: uuid.New(), WorkspaceID: wid, Key: key}
+	s.items[item.ID] = item
 	return item, nil
-}
-func (s *apiStore) Delete(_ context.Context, id uuid.UUID) error {
-	if s.items[id] == nil {
-		return repository.ErrNotFound
-	}
-	delete(s.items, id)
-	return nil
-}
-func (s *apiStore) NameExists(_ context.Context, wid uuid.UUID, name string, except uuid.UUID) (bool, error) {
-	for _, item := range s.items {
-		if item.WorkspaceID == wid && item.ID != except && item.Name == name {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 type apiWorkspaces map[uuid.UUID]*workspaceModel.Workspace
@@ -85,100 +49,100 @@ func (w apiWorkspaces) Get(_ context.Context, id uuid.UUID) (*workspaceModel.Wor
 	}
 	return nil, workspaceRepository.ErrNotFound
 }
-
 func TestServiceAPI(t *testing.T) {
 	wid := uuid.New()
-	store := &apiStore{items: map[uuid.UUID]*model.Service{}}
-	c := New(service.New(store, apiWorkspaces{wid: {ID: wid, RootPath: t.TempDir()}}))
+	root := t.TempDir()
+	if _, err := workspaceconfig.Write(root, []byte("services: {}\n"), ""); err != nil {
+		t.Fatal(err)
+	}
+	c := New(service.New(&apiStore{items: map[uuid.UUID]*model.Identity{}}, apiWorkspaces{wid: {ID: wid, RootPath: root}}))
 	handler := api.Router(slog.New(slog.NewTextHandler(io.Discard, nil)), "token", "http://127.0.0.1:7456", func(context.Context) error { return nil }, func(r chi.Router) {
+		r.Get("/workspaces/{id}/configuration", c.Configuration)
+		r.Post("/workspaces/{id}/configuration/validate", c.Validate)
+		r.Put("/workspaces/{id}/configuration", c.Save)
 		r.Post("/workspaces/{id}/services", c.Create)
 		r.Get("/workspaces/{id}/services", c.List)
 		r.Get("/services/{id}", c.Get)
 		r.Patch("/services/{id}", c.Update)
 		r.Delete("/services/{id}", c.Delete)
+		r.Get("/services/{id}/environment", c.ListEnvironment)
+		r.Get("/services/{id}/environment/{name}", c.ReadEnvironment)
+		r.Put("/services/{id}/environment/{name}", c.SaveEnvironment)
 	})
-	request := func(method, path, body, token string) *httptest.ResponseRecorder {
+	request := func(method, path, body string) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer token")
 		if body != "" {
 			req.Header.Set("Content-Type", "application/json")
-		}
-		if token != "" {
-			req.Header.Set("Authorization", "Bearer "+token)
 		}
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 		return w
 	}
-	path := "/api/v1/workspaces/" + wid.String() + "/services"
-	if w := request("GET", path, "", ""); w.Code != 401 {
-		t.Fatalf("unauthorized: %d", w.Code)
+	base := "/api/v1/workspaces/" + wid.String()
+	w := request("GET", base+"/configuration", "")
+	if w.Code != 200 {
+		t.Fatalf("configuration: %d %s", w.Code, w.Body.String())
 	}
-	if w := request("GET", path, "", "token"); w.Code != 200 || strings.TrimSpace(w.Body.String()) != "[]" {
-		t.Fatalf("empty list: %d %s", w.Code, w.Body.String())
+	var snapshot workspaceconfig.Snapshot
+	if err := json.Unmarshal(w.Body.Bytes(), &snapshot); err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range []struct {
-		method, path, body string
-		status             int
-	}{
-		{"POST", "/api/v1/workspaces/bad/services", `{}`, 400},
-		{"POST", "/api/v1/workspaces/" + uuid.NewString() + "/services", `{"name":"x","command":"go"}`, 404},
-		{"POST", path, `{"name":"x","command":"go","args":[1]}`, 400},
-		{"POST", path, `{"name":"x","command":"go","env":{"A":1}}`, 400},
-		{"POST", path, `{"name":"x","command":"go","enabled":null}`, 400},
-		{"POST", path, `{"name":"x","command":"go","unknown":1}`, 400},
-		{"GET", path + "?limit=0", "", 400},
-		{"GET", path + "?offset=-1", "", 400},
-		{"GET", path + "?offset=1000001", "", 400},
-		{"GET", "/api/v1/services/bad", "", 400},
-	} {
-		w := request(tc.method, tc.path, tc.body, "token")
-		if w.Code != tc.status {
-			t.Fatalf("%s %s: %d %s", tc.method, tc.path, w.Code, w.Body.String())
-		}
-	}
-	w := request("POST", path, `{"name":"api","command":"go","args":["run"],"enabled":false,"auto_restart":true}`, "token")
+	w = request("POST", base+"/services", `{"name":"api","command":"go","args":["run","."],"revision":"`+snapshot.Revision+`"}`)
 	if w.Code != 201 {
 		t.Fatalf("create: %d %s", w.Code, w.Body.String())
 	}
 	var item model.Service
-	if err := json.Unmarshal(w.Body.Bytes(), &item); err != nil || item.ID == uuid.Nil || *item.Enabled || !item.AutoRestart {
-		t.Fatalf("create response: %+v %v", item, err)
+	if err := json.Unmarshal(w.Body.Bytes(), &item); err != nil {
+		t.Fatal(err)
 	}
-	if w := request("POST", path, `{"name":"api","command":"go"}`, "token"); w.Code != 409 {
-		t.Fatalf("duplicate: %d", w.Code)
+	envPath := filepath.Join(root, ".env")
+	if err := os.WriteFile(envPath, []byte("VALUE=1\r\n"), 0600); err != nil {
+		t.Fatal(err)
 	}
-	idPath := "/api/v1/services/" + item.ID.String()
-	for _, tc := range []struct {
-		method, body string
-		status       int
-	}{
-		{"GET", "", 200}, {"PATCH", `{}`, 400}, {"PATCH", `{"args":null}`, 400},
-		{"PATCH", `{"workspace_id":"` + uuid.NewString() + `"}`, 400},
-		{"PATCH", `{"args":[],"env":{},"enabled":false,"auto_restart":false}`, 200},
-	} {
-		w := request(tc.method, idPath, tc.body, "token")
-		if w.Code != tc.status {
-			t.Fatalf("%s: %d %s", tc.method, w.Code, w.Body.String())
-		}
+	envURL := "/api/v1/services/" + item.ID.String() + "/environment"
+	if w := request("GET", envURL, ""); w.Code != 200 || strings.TrimSpace(w.Body.String()) != `[".env"]` {
+		t.Fatalf("environment list: %d %s", w.Code, w.Body.String())
 	}
-	w = request("GET", idPath, "", "token")
-	if !strings.Contains(w.Body.String(), `"args":[]`) || !strings.Contains(w.Body.String(), `"env":{}`) || !strings.Contains(w.Body.String(), `"auto_restart":false`) {
-		t.Fatalf("patch result: %s", w.Body.String())
+	w = request("GET", envURL+"/.env", "")
+	if w.Code != 200 {
+		t.Fatalf("environment read: %d %s", w.Code, w.Body.String())
 	}
-	if w := request("DELETE", idPath, "", "token"); w.Code != 204 {
-		t.Fatalf("delete: %d", w.Code)
+	var env service.EnvFile
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil || env.Content != "VALUE=1\r\n" {
+		t.Fatalf("environment read: %+v %v", env, err)
 	}
-	if w := request("GET", idPath, "", "token"); w.Code != 404 {
-		t.Fatalf("missing get: %d", w.Code)
+	if w := request("PUT", envURL+"/.env", `{"revision":"`+env.Revision+`"}`); w.Code != 400 {
+		t.Fatalf("missing content: %d %s", w.Code, w.Body.String())
 	}
-	if w := request("DELETE", idPath, "", "token"); w.Code != 404 {
-		t.Fatalf("missing delete: %d", w.Code)
+	w = request("PUT", envURL+"/.env", `{"content":"VALUE=2\r\n","revision":"`+env.Revision+`"}`)
+	if w.Code != 200 {
+		t.Fatalf("environment save: %d %s", w.Code, w.Body.String())
 	}
-	if w := request("GET", "/api/v1/workspaces/"+uuid.NewString()+"/services", "", "token"); w.Code != 404 {
-		t.Fatalf("missing workspace list: %d", w.Code)
+	if data, err := os.ReadFile(envPath); err != nil || string(data) != "VALUE=2\r\n" {
+		t.Fatalf("environment on disk: %q %v", data, err)
 	}
-	if w := request(http.MethodGet, path, "", "token"); w.Code != 200 {
-		t.Fatalf("final list: %d", w.Code)
+	if w := request("PUT", envURL+"/.env", `{"content":"OLD=1","revision":"`+env.Revision+`"}`); w.Code != 409 {
+		t.Fatalf("stale environment save: %d %s", w.Code, w.Body.String())
+	}
+	if w := request("GET", envURL+"/.env.local", ""); w.Code != 404 || !strings.Contains(w.Body.String(), "environment file not found") {
+		t.Fatalf("missing environment file: %d %s", w.Code, w.Body.String())
+	}
+	if w := request("POST", base+"/services", `{"name":"other","command":"go","revision":"`+snapshot.Revision+`"}`); w.Code != 409 {
+		t.Fatalf("stale create: %d %s", w.Code, w.Body.String())
+	}
+	w = request("GET", base+"/configuration", "")
+	if err := json.Unmarshal(w.Body.Bytes(), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if w := request("POST", base+"/configuration/validate", `{"content":"services:\n  api:\n    command: go\n    wrong: true\n"}`); w.Code != 400 {
+		t.Fatalf("invalid YAML: %d %s", w.Code, w.Body.String())
+	}
+	if w := request("PUT", base+"/configuration", `{"content":"services: {}\n","revision":"`+snapshot.Revision+`"}`); w.Code != 200 {
+		t.Fatalf("save: %d %s", w.Code, w.Body.String())
+	}
+	if w := request("GET", "/api/v1/services/"+item.ID.String(), ""); w.Code != 404 {
+		t.Fatalf("removed: %d %s", w.Code, w.Body.String())
 	}
 }

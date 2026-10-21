@@ -65,6 +65,29 @@ pub fn start_shell_terminal(
     )
 }
 
+#[tauri::command]
+pub fn start_docker_terminal(
+    workspace_id: String,
+    session_id: String,
+    viewer_id: String,
+    after: u64,
+    channel: Channel<Value>,
+    state: State<TerminalTasks>,
+) -> Result<(), String> {
+    uuid::Uuid::parse_str(&workspace_id).map_err(|_| "Invalid workspace ID")?;
+    uuid::Uuid::parse_str(&session_id).map_err(|_| "Invalid Docker terminal ID")?;
+    uuid::Uuid::parse_str(&viewer_id).map_err(|_| "Invalid viewer ID")?;
+    start(
+        format!("docker:{session_id}"),
+        session_id.clone(),
+        format!("/api/v1/workspaces/{workspace_id}/docker/terminals/{session_id}/stream"),
+        viewer_id,
+        after,
+        channel,
+        state,
+    )
+}
+
 fn start(
     key: String,
     terminal_id: String,
@@ -109,6 +132,11 @@ pub fn stop_terminal(
 #[tauri::command]
 pub fn stop_shell_terminal(session_id: String, viewer_id: String, state: State<TerminalTasks>) {
     stop(format!("shell:{session_id}"), session_id, viewer_id, state)
+}
+
+#[tauri::command]
+pub fn stop_docker_terminal(session_id: String, viewer_id: String, state: State<TerminalTasks>) {
+    stop(format!("docker:{session_id}"), session_id, viewer_id, state)
 }
 
 fn stop(key: String, terminal_id: String, viewer_id: String, state: State<TerminalTasks>) {
@@ -195,6 +223,23 @@ pub fn shell_terminal_input(
 }
 
 #[tauri::command]
+pub fn docker_terminal_input(
+    session_id: String,
+    data: String,
+    state: State<TerminalTasks>,
+) -> Result<(), String> {
+    if data.is_empty() || data.len() > 4096 {
+        return Err("Terminal input must be 1–4096 bytes".into());
+    }
+    send(
+        &state,
+        &format!("docker:{session_id}"),
+        &session_id,
+        json!({"type":"input", "data":data}),
+    )
+}
+
+#[tauri::command]
 pub fn shell_terminal_resize(
     session_id: String,
     cols: u16,
@@ -207,6 +252,24 @@ pub fn shell_terminal_resize(
     send(
         &state,
         &format!("shell:{session_id}"),
+        &session_id,
+        json!({"type":"resize", "cols":cols, "rows":rows}),
+    )
+}
+
+#[tauri::command]
+pub fn docker_terminal_resize(
+    session_id: String,
+    cols: u16,
+    rows: u16,
+    state: State<TerminalTasks>,
+) -> Result<(), String> {
+    if cols == 0 || rows == 0 || cols > 500 || rows > 300 {
+        return Err("Invalid terminal size".into());
+    }
+    send(
+        &state,
+        &format!("docker:{session_id}"),
         &session_id,
         json!({"type":"resize", "cols":cols, "rows":rows}),
     )

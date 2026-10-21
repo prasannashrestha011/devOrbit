@@ -8,6 +8,7 @@
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
+    "core:path:allow-resolve-directory",
     "dialog:allow-open"
   ]
 }

@@ -3,14 +3,15 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type { Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { SearchAddon } from "@xterm/addon-search";
-import type { ProcessStatus, Service, ShellSession } from "./api";
+import type { DockerTerminal, ProcessStatus, Service, ShellSession } from "./api";
 
 type Frame = { type: string; sequence?: number; data?: string };
 
-export default function TerminalPane({ service, status, shell, workspaceId, fontFamily = "", focused, expanded, busy, onFocus, onExpand, onAction, onClose, onStopped }: {
+export default function TerminalPane({ service, status, shell, docker, workspaceId, fontFamily = "", focused, expanded, busy, onFocus, onExpand, onAction, onClose, onStopped }: {
   service?: Service;
   status?: ProcessStatus;
   shell?: ShellSession;
+  docker?: DockerTerminal;
   workspaceId?: string;
   fontFamily?: string;
   focused: boolean;
@@ -39,11 +40,11 @@ export default function TerminalPane({ service, status, shell, workspaceId, font
   const [connection, setConnection] = useState("disconnected");
   const [search, setSearch] = useState("");
   const [showSearch, setShowSearch] = useState(false);
-  const id = shell?.id ?? service?.id ?? "";
-  const name = shell?.shell ?? service?.name ?? "Terminal";
-  const executionId = shell?.id ?? status?.execution_id;
-  const running = (shell?.state ?? status?.state) === "running";
-  isRunning.current = shell ? shell.state === "running" : Boolean(service && executionId && connection !== "stopped");
+  const id = docker?.id ?? shell?.id ?? service?.id ?? "";
+  const name = docker?.container_name ?? shell?.shell ?? service?.name ?? "Terminal";
+  const executionId = docker?.id ?? shell?.id ?? status?.execution_id;
+  const running = (docker?.state ?? shell?.state ?? status?.state) === "running";
+  isRunning.current = docker ? docker.state === "running" && connection !== "stopped" : shell ? shell.state === "running" : Boolean(service && executionId && connection !== "stopped");
   acceptsInput.current = focused && isRunning.current && connection === "connected";
 
   useEffect(() => {
@@ -52,12 +53,12 @@ export default function TerminalPane({ service, status, shell, workspaceId, font
     let observer: ResizeObserver | undefined;
     let instance: Terminal | undefined;
     let resizeTimer = 0;
-    const inputTarget = shell ? { shellId: id } : { serviceId: id, executionId };
+    const inputTarget = docker ? "docker" : shell ? "shell" : "service";
     const sendInput = (value: string) => {
-      const target = inputTarget;
-      inputQueue.current = inputQueue.current.then(() => disposed ? undefined : "shellId" in target
-        ? invoke<void>("shell_terminal_input", { sessionId: target.shellId, data: value })
-        : invoke<void>("terminal_input", { serviceId: target.serviceId, executionId: target.executionId, data: value })).catch(() => {
+      inputQueue.current = inputQueue.current.then(() => disposed ? undefined : inputTarget === "docker"
+        ? invoke<void>("docker_terminal_input", { sessionId: id, data: value })
+        : inputTarget === "shell" ? invoke<void>("shell_terminal_input", { sessionId: id, data: value })
+        : invoke<void>("terminal_input", { serviceId: id, executionId, data: value })).catch(() => {
           if (!disposed) setConnection("disconnected");
         });
     };
@@ -95,8 +96,7 @@ export default function TerminalPane({ service, status, shell, workspaceId, font
         if (!host.current || !instance) return;
         fit.fit();
         if (isRunning.current && executionId && instance.cols > 0 && instance.rows > 0) {
-          const target = inputTarget;
-          invoke("shellId" in target ? "shell_terminal_resize" : "terminal_resize", "shellId" in target ? { sessionId: target.shellId, cols: instance.cols, rows: instance.rows } : { serviceId: target.serviceId, executionId: target.executionId, cols: instance.cols, rows: instance.rows }).catch(() => {});
+          invoke(inputTarget === "docker" ? "docker_terminal_resize" : inputTarget === "shell" ? "shell_terminal_resize" : "terminal_resize", inputTarget === "service" ? { serviceId: id, executionId, cols: instance.cols, rows: instance.rows } : { sessionId: id, cols: instance.cols, rows: instance.rows }).catch(() => {});
         }
       };
       resizeRef.current = resize;
@@ -127,8 +127,8 @@ export default function TerminalPane({ service, status, shell, workspaceId, font
           setConnection("disconnected");
         }
       };
-      await invoke(shell ? "start_shell_terminal" : "start_terminal", shell ? { workspaceId, sessionId: id, viewerId, after: 0, channel } : { serviceId: id, executionId, viewerId, after: 0, channel }).catch(() => { if (!disposed) setConnection("disconnected"); });
-      if (disposed) invoke(shell ? "stop_shell_terminal" : "stop_terminal", shell ? { sessionId: id, viewerId } : { serviceId: id, executionId, viewerId }).catch(() => {});
+      await invoke(docker ? "start_docker_terminal" : shell ? "start_shell_terminal" : "start_terminal", docker || shell ? { workspaceId, sessionId: id, viewerId, after: 0, channel } : { serviceId: id, executionId, viewerId, after: 0, channel }).catch(() => { if (!disposed) setConnection("disconnected"); });
+      if (disposed) invoke(docker ? "stop_docker_terminal" : shell ? "stop_shell_terminal" : "stop_terminal", docker || shell ? { sessionId: id, viewerId } : { serviceId: id, executionId, viewerId }).catch(() => {});
     }
     mount().catch(() => setConnection("disconnected"));
     return () => {
@@ -140,7 +140,7 @@ export default function TerminalPane({ service, status, shell, workspaceId, font
       fitAddon.current = null;
       resizeRef.current = () => {};
       searchAddon.current = null;
-      if (executionId) invoke(shell ? "stop_shell_terminal" : "stop_terminal", shell ? { sessionId: id, viewerId } : { serviceId: id, executionId, viewerId }).catch(() => {});
+      if (executionId) invoke(docker ? "stop_docker_terminal" : shell ? "stop_shell_terminal" : "stop_terminal", docker || shell ? { sessionId: id, viewerId } : { serviceId: id, executionId, viewerId }).catch(() => {});
     };
   }, [id, executionId, workspaceId]);
 
@@ -158,7 +158,7 @@ export default function TerminalPane({ service, status, shell, workspaceId, font
     if (search) searchAddon.current?.findNext(search);
   }
 
-  const state = shell?.state ?? status?.state ?? "stopped";
+  const state = docker?.state ?? shell?.state ?? status?.state ?? "stopped";
   const shellReady = Boolean(service && (state === "exited" || state === "failed" || state === "stopped") && connection === "connected");
   return (
     <section className={`terminal-pane ${focused ? "focused" : ""} ${expanded ? "expanded" : ""}`} tabIndex={0} onFocus={onFocus} onClick={onFocus} aria-label={`${name} terminal`}>
@@ -166,7 +166,7 @@ export default function TerminalPane({ service, status, shell, workspaceId, font
         <div className="terminal-pane-title"><span className={`terminal-state-dot ${state}`} /><strong>{name}</strong><small>{shellReady ? "tmux shell" : state}{!shellReady && (shell?.exit_code ?? status?.exit_code) != null ? ` · ${service ? "service exit" : "exit"} ${shell?.exit_code ?? status?.exit_code}` : ""}</small></div>
         <div className="terminal-pane-actions">
           <button type="button" onClick={() => setShowSearch((current) => !current)} aria-label={`Search ${name} terminal`}>Search</button>
-          {shell ? <button type="button" disabled={busy} onClick={onClose} aria-label={`Close ${name} terminal`}>Close</button> : <>
+          {shell || docker ? <button type="button" disabled={busy} onClick={onClose} aria-label={`Close ${name} terminal`}>Close</button> : <>
             {onExpand && <button type="button" onClick={onExpand} aria-label={expanded ? `Collapse ${name} terminal` : `Expand ${name} terminal`}>{expanded ? "Collapse" : "Expand"}</button>}
             <button type="button" disabled={busy || (!running && !service?.enabled)} onClick={() => onAction?.(running ? "stop" : "start")}>{running ? "Stop" : "Start"}</button>
           </>}

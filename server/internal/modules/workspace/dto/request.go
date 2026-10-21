@@ -12,13 +12,11 @@ import (
 type CreateInput struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	RootPath    string `json:"root_path"`
 }
 
 type PatchInput struct {
 	Name        *string
 	Description *string
-	RootPath    *string
 }
 
 func DecodeCreate(r *http.Request) (CreateInput, error) {
@@ -48,8 +46,6 @@ func DecodePatch(r *http.Request) (PatchInput, error) {
 			input.Name = &value
 		case "description":
 			input.Description = &value
-		case "root_path":
-			input.RootPath = &value
 		default:
 			return input, errors.New("unsupported workspace field")
 		}

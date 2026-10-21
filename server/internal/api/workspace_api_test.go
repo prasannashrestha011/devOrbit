@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/model"
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/repository"
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/service"
+	"github.com/prasannashrestha011/devOrbit/internal/workspaceconfig"
 )
 
 type workspaceMemoryStore struct {
@@ -66,8 +69,9 @@ func (s *workspaceMemoryStore) Delete(_ context.Context, id uuid.UUID) error {
 
 func TestWorkspaceAPI(t *testing.T) {
 	store := &workspaceMemoryStore{items: make(map[uuid.UUID]*model.Workspace)}
-	svc := service.New(store)
-	c := controller.New(svc)
+	dataDir := t.TempDir()
+	svc := service.New(store, dataDir)
+	c := controller.New(svc, nil)
 	api := Router(slog.New(slog.NewTextHandler(io.Discard, nil)), "test-token", "http://127.0.0.1:7456", func(context.Context) error { return nil }, func(router chi.Router) {
 		router.Post("/workspaces", c.Create)
 		router.Get("/workspaces", c.List)
@@ -96,8 +100,8 @@ func TestWorkspaceAPI(t *testing.T) {
 		t.Fatalf("empty list: %d %s", w.Code, w.Body.String())
 	}
 	for _, tc := range []struct{ method, suffix, body string }{
-		{http.MethodPost, "", `{"name":" ","root_path":"/tmp"}`},
-		{http.MethodPost, "", `{"name":"x","root_path":"/tmp","extra":true}`},
+		{http.MethodPost, "", `{"name":" "}`},
+		{http.MethodPost, "", `{"name":"x","root_path":"/tmp"}`},
 		{http.MethodGet, "?limit=0", ""},
 		{http.MethodGet, "?offset=-1", ""},
 		{http.MethodGet, "?offset=1000001", ""},
@@ -110,15 +114,14 @@ func TestWorkspaceAPI(t *testing.T) {
 			t.Fatalf("%s %s: %d %s", tc.method, tc.suffix, w.Code, w.Body.String())
 		}
 	}
-	missingType := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"name":"x","root_path":"/tmp"}`))
+	missingType := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"name":"x"}`))
 	missingType.Header.Set("Authorization", "Bearer test-token")
 	missingTypeResponse := httptest.NewRecorder()
 	api.ServeHTTP(missingTypeResponse, missingType)
 	if missingTypeResponse.Code != http.StatusBadRequest {
 		t.Fatalf("missing JSON content type: %d", missingTypeResponse.Code)
 	}
-	root := t.TempDir()
-	createBody, _ := json.Marshal(map[string]string{"name": " project ", "description": "notes", "root_path": root})
+	createBody, _ := json.Marshal(map[string]string{"name": " project ", "description": "notes"})
 	created := request(http.MethodPost, path, string(createBody), "test-token")
 	if created.Code != http.StatusCreated {
 		t.Fatalf("create: %d %s", created.Code, created.Body.String())
@@ -127,7 +130,18 @@ func TestWorkspaceAPI(t *testing.T) {
 	if err := json.Unmarshal(created.Body.Bytes(), &item); err != nil || item.ID == uuid.Nil || item.Name != "project" {
 		t.Fatalf("create response: %+v %v", item, err)
 	}
+	root := filepath.Join(dataDir, "workspaces", item.ID.String())
+	if item.RootPath != root {
+		t.Fatalf("workspace root = %q, want %q", item.RootPath, root)
+	}
 	idPath := path + "/" + item.ID.String()
+	config, err := workspaceconfig.Read(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workspaceconfig.Write(root, []byte("services:\n  api:\n    command: go run .\n"), config.Revision); err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		method, suffix, body string
 		status               int
@@ -137,6 +151,7 @@ func TestWorkspaceAPI(t *testing.T) {
 		{http.MethodPatch, "/" + item.ID.String(), `{"description":""}`, http.StatusOK},
 		{http.MethodPatch, "/" + item.ID.String(), `{"name":null}`, http.StatusBadRequest},
 		{http.MethodPatch, "/" + item.ID.String(), `{"created_at":"bad"}`, http.StatusBadRequest},
+		{http.MethodPatch, "/" + item.ID.String(), `{"root_path":"/tmp"}`, http.StatusBadRequest},
 	} {
 		w := request(tc.method, path+tc.suffix, tc.body, "test-token")
 		if w.Code != tc.status {
@@ -150,9 +165,15 @@ func TestWorkspaceAPI(t *testing.T) {
 	if w := request(http.MethodDelete, idPath, "", "test-token"); w.Code != http.StatusConflict {
 		t.Fatalf("workspace delete conflict: %d %s", w.Code, w.Body.String())
 	}
+	if _, err := os.Stat(workspaceconfig.Path(root)); err != nil {
+		t.Fatalf("configuration lost on delete conflict: %v", err)
+	}
 	store.deleteErr = nil
 	if w := request(http.MethodDelete, idPath, "", "test-token"); w.Code != http.StatusNoContent {
 		t.Fatalf("delete: %d %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(workspaceconfig.Path(root)); !os.IsNotExist(err) {
+		t.Fatalf("configuration remained after workspace deletion: %v", err)
 	}
 	if w := request(http.MethodGet, idPath, "", "test-token"); w.Code != http.StatusNotFound {
 		t.Fatalf("missing get: %d %s", w.Code, w.Body.String())

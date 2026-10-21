@@ -7,22 +7,29 @@ import (
 	workspace "github.com/prasannashrestha011/devOrbit/internal/modules/workspace/model"
 )
 
-// Workspace keeps GORM Gen's generated relationship methods in this model package.
-type Workspace = workspace.Workspace
-
+// Service is a runtime projection of workspace YAML, not a database table.
 type Service struct {
-	ID               uuid.UUID           `json:"id" gorm:"type:uuid;primaryKey"`
-	WorkspaceID      uuid.UUID           `json:"workspace_id" gorm:"type:uuid;not null;index;uniqueIndex:idx_service_workspace_name"`
-	Workspace        workspace.Workspace `json:"-" gorm:"foreignKey:WorkspaceID;constraint:OnDelete:RESTRICT"`
-	Name             string              `json:"name" gorm:"type:varchar(120);not null;check:name <> '';uniqueIndex:idx_service_workspace_name"`
-	Command          string              `json:"command" gorm:"type:text;not null;check:command <> ''"`
-	Args             []string            `json:"args" gorm:"type:jsonb;serializer:json;not null"`
-	WorkingDirectory string              `json:"working_directory" gorm:"type:text;not null;default:''"`
-	Env              map[string]string   `json:"env" gorm:"type:jsonb;serializer:json;not null"`
-	Enabled          *bool               `json:"enabled" gorm:"not null;default:true"`
-	AutoRestart      bool                `json:"auto_restart" gorm:"not null;default:false"`
-	CreatedAt        time.Time           `json:"created_at"`
-	UpdatedAt        time.Time           `json:"updated_at"`
+	ID               uuid.UUID         `json:"id"`
+	WorkspaceID      uuid.UUID         `json:"workspace_id"`
+	Name             string            `json:"name"`
+	Command          string            `json:"command"`
+	Args             []string          `json:"args"`
+	WorkingDirectory string            `json:"working_directory"`
+	GitBranch        string            `json:"git_branch"`
+	Env              map[string]string `json:"env"`
+	Ports            map[string]int    `json:"ports"`
+	Enabled          *bool             `json:"enabled"`
+	AutoRestart      bool              `json:"auto_restart"`
+	CreatedAt        time.Time         `json:"created_at"`
+	UpdatedAt        time.Time         `json:"updated_at"`
 }
 
-func (Service) TableName() string { return "services" }
+// Identity persists only the YAML key to UUID association needed by logs and running processes.
+type Identity struct {
+	ID          uuid.UUID           `gorm:"type:uuid;primaryKey"`
+	WorkspaceID uuid.UUID           `gorm:"type:uuid;not null;uniqueIndex:idx_identity_workspace_key"`
+	Workspace   workspace.Workspace `gorm:"foreignKey:WorkspaceID;constraint:OnDelete:CASCADE"`
+	Key         string              `gorm:"type:varchar(120);not null;uniqueIndex:idx_identity_workspace_key"`
+}
+
+func (Identity) TableName() string { return "service_identities" }

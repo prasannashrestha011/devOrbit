@@ -1,8 +1,32 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import TerminalPane from "./TerminalPane";
+import DockerPanel from "./DockerPanel";
+import YamlSource from "./YamlSource";
+import EnvironmentEditor, { type EnvDraft } from "./EnvironmentEditor";
+import TrafficInspector from "./TrafficInspector";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { homeDir } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
+import {
+  Activity,
+  ChevronLeft,
+  ChevronRight,
+  FileCode2,
+  Folder,
+  GitBranch as GitBranchIcon,
+  LayoutGrid,
+  List,
+  Pencil,
+  Play,
+  Plus,
+  RotateCw,
+  Search,
+  Settings,
+  Square,
+  Terminal,
+  Trash2,
+} from "lucide-react";
 import { formatCommandLine, parseCommandLine } from "./commandLine";
 import {
   api,
@@ -12,6 +36,7 @@ import {
   type OperationResult,
   type Service,
   type ServiceInput,
+	type WorkspaceConfiguration,
   type ShellSession,
   type Workspace,
   type WorkspaceInput,
@@ -21,85 +46,36 @@ import {
 type Dialog =
   | { kind: "workspace"; item?: Workspace }
   | { kind: "service"; item?: Service }
+	| { kind: "configuration" }
   | null;
-type Notice = { workspace_id: string };
+type Notice = { workspace_id: string; type?: string };
 
-function Icon({ name, size = 18 }: { name: string; size?: number }) {
-  const paths: Record<string, React.ReactNode> = {
-    grid: (
-      <>
-        <rect x="3" y="3" width="7" height="7" rx="1" />
-        <rect x="14" y="3" width="7" height="7" rx="1" />
-        <rect x="3" y="14" width="7" height="7" rx="1" />
-        <rect x="14" y="14" width="7" height="7" rx="1" />
-      </>
-    ),
-    folder: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10H3z" />,
-    plus: <path d="M12 5v14M5 12h14" />,
-    play: <path d="m8 5 11 7-11 7z" />,
-    stop: <rect x="6" y="6" width="12" height="12" rx="1" />,
-    restart: (
-      <>
-        <path d="M20 8a8 8 0 1 0 1 6" />
-        <path d="M20 3v5h-5" />
-      </>
-    ),
-    logs: (
-      <>
-        <path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5" />
-      </>
-    ),
-    settings: (
-      <>
-        <path d="M10 2h4l.6 2.2 1.8.8 2-.9 2.8 2.8-.9 2 .8 1.8L23 11v2l-2.2.6-.8 1.8.9 2-2.8 2.8-2-.9-1.8.8L14 22h-4l-.6-2.2-1.8-.8-2 .9-2.8-2.8.9-2-.8-1.8L1 13v-2l2.2-.6.8-1.8-.9-2L6 3.8l2 .9 1.8-.8z" />
-        <circle cx="12" cy="12" r="3" />
-      </>
-    ),
-    edit: (
-      <>
-        <path d="m4 20 4-.8L20 7l-3-3L5 16z" />
-        <path d="m14 7 3 3" />
-      </>
-    ),
-    trash: (
-      <>
-        <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7M14 10v7" />
-      </>
-    ),
-    arrow: <path d="m9 6 6 6-6 6" />,
-    back: <path d="m15 6-6 6 6 6" />,
-    search: (
-      <>
-        <circle cx="10.5" cy="10.5" r="6.5" />
-        <path d="m16 16 5 5" />
-      </>
-    ),
-    pulse: (
-      <>
-        <path d="M2 12h5l2-5 4 10 2-5h7" />
-      </>
-    ),
-    terminal: (
-      <>
-        <path d="m4 6 6 6-6 6M12 18h8" />
-      </>
-    ),
-  };
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      {paths[name]}
-    </svg>
-  );
+const icons = {
+  grid: LayoutGrid,
+  folder: Folder,
+  plus: Plus,
+  play: Play,
+  stop: Square,
+  restart: RotateCw,
+  logs: List,
+  file: FileCode2,
+  settings: Settings,
+  edit: Pencil,
+  trash: Trash2,
+  arrow: ChevronRight,
+  back: ChevronLeft,
+  search: Search,
+  pulse: Activity,
+  terminal: Terminal,
+};
+
+function Icon({ name, size = 18 }: { name: keyof typeof icons; size?: number }) {
+  const IconComponent = icons[name];
+  return <IconComponent size={size} strokeWidth={1.8} aria-hidden="true" />;
+}
+
+function GitBranch({ branch }: { branch: string }) {
+  return branch ? <span className="git-branch" title={branch}><GitBranchIcon size={14} strokeWidth={1.8} aria-hidden="true" /><span>{branch}</span></span> : null;
 }
 
 function StateBadge({ state }: { state: string }) {
@@ -123,11 +99,26 @@ function errorMessage(error: unknown) {
 
 async function browseDirectory(setPath: (path: string) => void, setError: (error: string) => void) {
   try {
-    const path = await open({ directory: true, multiple: false });
-    if (path) setPath(path);
+    const defaultPath = localStorage.getItem("devorbit.lastPickerDirectory") || await homeDir();
+    const path = await open({ directory: true, multiple: false, defaultPath });
+    if (path) {
+      localStorage.setItem("devorbit.lastPickerDirectory", path);
+      setPath(path);
+    }
   } catch (error) {
     setError(errorMessage(error));
   }
+}
+
+function relativeDirectory(workspaceRoot: string, path: string): string | null {
+  const root = workspaceRoot.replace(/\\/g, "/").replace(/\/+$/, "") || "/";
+  const chosen = path.replace(/\\/g, "/").replace(/\/+$/, "") || "/";
+  const prefix = root === "/" ? root : `${root}/`;
+  const windows = /^[A-Za-z]:\//.test(root);
+  const matchRoot = windows ? root.toLowerCase() : root;
+  const matchChosen = windows ? chosen.toLowerCase() : chosen;
+  if (matchChosen === matchRoot) return "";
+  return matchChosen.startsWith(windows ? prefix.toLowerCase() : prefix) ? chosen.slice(prefix.length) : null;
 }
 
 function WorkspaceForm({
@@ -141,7 +132,6 @@ function WorkspaceForm({
 }) {
   const [name, setName] = useState(item?.name ?? "");
   const [description, setDescription] = useState(item?.description ?? "");
-  const [root, setRoot] = useState(item?.root_path ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   return (
@@ -167,7 +157,6 @@ function WorkspaceForm({
             await onSave({
               name: name.trim(),
               description,
-              root_path: root.trim(),
             });
           } catch (error) {
             setError(errorMessage(error));
@@ -201,27 +190,6 @@ function WorkspaceForm({
             placeholder="My project"
           />
         </label>
-        <div className="path-control">
-          <label htmlFor="workspace-root">Root directory</label>
-          <div className="path-field">
-            <input
-              id="workspace-root"
-              required
-              value={root}
-              onChange={(e) => setRoot(e.target.value)}
-              placeholder="/absolute/path/to/project"
-            />
-            <button
-              type="button"
-              className="button subtle"
-              aria-label="Browse for workspace directory"
-              onClick={() => browseDirectory(setRoot, setError)}
-            >
-              Browse…
-            </button>
-          </div>
-          <small>Must exist on this computer.</small>
-        </div>
         <label>
           Description
           <textarea
@@ -251,11 +219,13 @@ function WorkspaceForm({
 
 function ServiceForm({
   item,
+  workspaceRoot,
   onSave,
   onClose,
 }: {
   item?: Service;
-  onSave: (value: ServiceInput) => Promise<void>;
+  workspaceRoot: string;
+  onSave: (value: Omit<ServiceInput, "revision">) => Promise<void>;
   onClose: () => void;
 }) {
   const [name, setName] = useState(item?.name ?? "");
@@ -263,12 +233,11 @@ function ServiceForm({
     item ? formatCommandLine([item.command, ...item.args]) : "",
   );
   const [directory, setDirectory] = useState(item?.working_directory ?? "");
-  const [env, setEnv] = useState(
-    Object.entries(item?.env ?? {})
+  const [ports, setPorts] = useState(
+    Object.entries(item?.ports ?? {})
       .map(([k, v]) => `${k}=${v}`)
       .join("\n"),
   );
-  const [enabled, setEnabled] = useState(item?.enabled ?? true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   return (
@@ -289,25 +258,29 @@ function ServiceForm({
         onSubmit={async (event) => {
           event.preventDefault();
           setError("");
-          const variables: Record<string, string> = {};
-          for (const line of env.split("\n").filter((line) => line.trim())) {
+          const namedPorts: Record<string, number> = {};
+          for (const line of ports.split("\n").filter((line) => line.trim())) {
             const at = line.indexOf("=");
-            if (at < 1) {
-              setError("Use KEY=value for each environment variable.");
+            const port = Number(line.slice(at + 1));
+            if (at < 1 || !Number.isInteger(port) || port < 1 || port > 65535) {
+              setError("Use name=port (1–65535) for each port.");
               return;
             }
-            variables[line.slice(0, at)] = line.slice(at + 1);
+            namedPorts[line.slice(0, at)] = port;
           }
           setSaving(true);
           try {
             const [command, ...args] = parseCommandLine(commandLine);
+            const enteredDirectory = directory.trim();
+            const workingDirectory = enteredDirectory.startsWith("/") || /^[A-Za-z]:[\\/]/.test(enteredDirectory)
+              ? relativeDirectory(workspaceRoot, enteredDirectory) ?? enteredDirectory
+              : enteredDirectory;
             await onSave({
               name: name.trim(),
               command,
               args,
-              working_directory: directory.trim(),
-              env: variables,
-              enabled,
+              working_directory: workingDirectory,
+              ports: namedPorts,
             });
           } catch (error) {
             setError(errorMessage(error));
@@ -342,6 +315,7 @@ function ServiceForm({
           <input
             required
             autoFocus
+            disabled={!!item}
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="API server"
@@ -362,41 +336,31 @@ function ServiceForm({
         <div className="path-control">
           <label htmlFor="service-directory">Working directory</label>
           <div className="path-field">
-            <input
-              id="service-directory"
-              value={directory}
-              onChange={(e) => setDirectory(e.target.value)}
-              placeholder="Workspace root"
-            />
+            <input id="service-directory" value={directory} onChange={(e) => setDirectory(e.target.value)} placeholder="Workspace root" />
             <button
               type="button"
               className="button subtle"
               aria-label="Browse for service working directory"
-              onClick={() => browseDirectory(setDirectory, setError)}
+              onClick={() => browseDirectory((path) => {
+                setDirectory(path);
+                setError("");
+              }, setError)}
             >
               Browse…
             </button>
           </div>
-          <small>Relative paths resolve from the workspace root.</small>
+          <small>Folders inside the workspace are saved as relative paths. Other folders are saved as absolute paths.</small>
         </div>
         <label>
-          Environment <span className="label-note">one KEY=value per line</span>
+          Expected ports <span className="label-note">one name=port per line</span>
           <textarea
             className="mono"
             rows={3}
-            value={env}
-            onChange={(e) => setEnv(e.target.value)}
-            placeholder="APP_ENV=development"
+            value={ports}
+            onChange={(e) => setPorts(e.target.value)}
+            placeholder="http=8080"
           />
-          <small>Stored as plaintext by the backend. Avoid secrets.</small>
-        </label>
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
-          />{" "}
-          Enabled for Start All
+          <small>Ports are informational; DevOrbit does not bind or inject them.</small>
         </label>
         {error && (
           <p className="form-error" role="alert">
@@ -414,6 +378,62 @@ function ServiceForm({
       </form>
     </div>
   );
+}
+
+function ConfigurationEditor({ workspaceId, initial, onSaved, onClose }: {
+  workspaceId: string;
+  initial: WorkspaceConfiguration;
+  onSaved: () => Promise<void>;
+  onClose: () => void;
+}) {
+  const [content, setContent] = useState(initial.content);
+  const [revision, setRevision] = useState(initial.revision);
+  const [preview, setPreview] = useState<string[] | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function validate() {
+    setError("");
+    try {
+      const result = await api.validateConfiguration(workspaceId, content);
+      setPreview(Object.keys(result.services));
+      return true;
+    } catch (problem) {
+      setPreview(null);
+      setError(errorMessage(problem));
+      return false;
+    }
+  }
+  return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="dialog configuration-dialog" role="dialog" aria-modal="true" aria-labelledby="configuration-dialog-title">
+      <div className="dialog-title"><div><span className="eyebrow">WORKSPACE CONFIGURATION</span><h2 id="configuration-dialog-title">.devorbit/workspace.yaml</h2></div><button className="icon-button" onClick={onClose} aria-label="Close">×</button></div>
+      <p className="hint">Save updates service definitions. Running processes keep their current configuration until you restart them.</p>
+      <label htmlFor="configuration-file">Import YAML into editor</label>
+      <input id="configuration-file" type="file" accept=".yaml,.yml,text/yaml" onChange={async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        setContent(await file.text());
+        setPreview(null);
+      }} />
+      <label htmlFor="configuration-source">YAML</label>
+      <YamlSource value={content} onChange={(value) => { setContent(value); setPreview(null); }} />
+      {preview && <p className="hint" role="status">Valid: {preview.length} service{preview.length === 1 ? "" : "s"}{preview.length ? ` — ${preview.join(", ")}` : ""}</p>}
+      {initial.revision !== revision && <p className="form-error" role="alert">The YAML file changed outside this editor. Reload it before saving or your save will be rejected.</p>}
+      {error && <p className="form-error" role="alert">{error}</p>}
+      <div className="dialog-actions">
+        <button className="button subtle" disabled={busy} onClick={async () => { try { const latest = await api.configuration(workspaceId); setContent(latest.content); setRevision(latest.revision); setPreview(null); setError(""); } catch (problem) { setError(errorMessage(problem)); } }}>Reload file</button>
+        <button className="button subtle" disabled={busy} onClick={() => void validate()}>Validate</button>
+        <button className="button primary" disabled={busy} onClick={async () => {
+          setBusy(true);
+          try {
+            if (!await validate()) return;
+            await api.saveConfiguration(workspaceId, content, revision);
+            await onSaved();
+          } catch (problem) { setError(errorMessage(problem)); }
+          finally { setBusy(false); }
+        }}>Save YAML</button>
+      </div>
+    </div>
+  </div>;
 }
 
 function LogViewer({
@@ -517,6 +537,7 @@ export default function App() {
   const [terminalFont, setTerminalFont] = useState(() => localStorage.getItem("devorbit.terminalFont") ?? "");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [services, setServices] = useState<Service[]>([]);
+	const [configuration, setConfiguration] = useState<WorkspaceConfiguration | null>(null);
   const [status, setStatus] = useState<WorkspaceStatus | null>(null);
   const [page, setPage] = useState<LogPage | null>(null);
   const [entries, setEntries] = useState<LogEntry[]>([]);
@@ -529,11 +550,16 @@ export default function App() {
   const [busy, setBusy] = useState("");
   const [result, setResult] = useState<OperationResult | null>(null);
   const [search, setSearch] = useState("");
+  const [serviceDetailTab, setServiceDetailTab] = useState<"logs" | "environment" | "traffic">("logs");
+  const [envDrafts, setEnvDrafts] = useState<Record<string, EnvDraft>>({});
+  const [envSelections, setEnvSelections] = useState<Record<string, string>>({});
   const selectedRef = useRef<string | null>(null);
   const serviceRef = useRef<string | null>(null);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const configurationRef = useRef<WorkspaceConfiguration | null>(null);
   selectedRef.current = selectedId;
   serviceRef.current = selectedServiceId;
+  configurationRef.current = configuration;
 
   const loadWorkspaces = useCallback(async () => {
     const list = await api.workspaces();
@@ -547,15 +573,14 @@ export default function App() {
   }, []);
 
   const loadWorkspace = useCallback(async (id: string) => {
-    const [items, snapshot, shells] = await Promise.all([
-      api.services(id),
-      api.workspaceStatus(id),
-      api.shellTerminals(id),
-    ]);
+    const [config, shells] = await Promise.all([api.configuration(id), api.shellTerminals(id)]);
+    const [itemsResult, statusResult] = await Promise.allSettled([api.services(id), api.workspaceStatus(id)]);
     if (selectedRef.current === id) {
-      setServices(items);
-      setStatus(snapshot);
+      setConfiguration(config);
+      setServices(itemsResult.status === "fulfilled" ? itemsResult.value : []);
+      setStatus(statusResult.status === "fulfilled" ? statusResult.value : null);
       setShellSessions(shells);
+      if (itemsResult.status === "rejected") setError(errorMessage(itemsResult.reason));
     }
   }, []);
 
@@ -597,6 +622,7 @@ export default function App() {
     setShellSessions([]);
     setActiveTerminalId(null);
     setServices([]);
+    setConfiguration(null);
     setStatus(null);
     setResult(null);
     setSearch("");
@@ -611,11 +637,24 @@ export default function App() {
   useEffect(() => {
     setPage(null);
     setEntries([]);
+    setServiceDetailTab("logs");
     if (selectedServiceId)
       loadLogs(selectedServiceId).catch((error) =>
         setError(errorMessage(error)),
       );
   }, [selectedServiceId, loadLogs]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    const timer = setInterval(() => {
+      Promise.all([api.configuration(selectedId), api.workspaceStatus(selectedId)]).then(([latest, current]) => {
+        if (selectedRef.current !== selectedId) return;
+        setStatus(current);
+        if (latest.revision !== configurationRef.current?.revision) return loadWorkspace(selectedId);
+      }).catch((problem) => setError(errorMessage(problem)));
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [selectedId, loadWorkspace]);
 
   useEffect(() => {
     let disposed = false;
@@ -636,7 +675,7 @@ export default function App() {
         }
       }),
       listen<Notice>("backend-event", (event) => {
-        if (disposed || event.payload.workspace_id !== selectedRef.current)
+        if (disposed || event.payload.workspace_id !== selectedRef.current || event.payload.type?.startsWith("traffic."))
           return;
         if (refreshTimer.current) return;
         refreshTimer.current = setTimeout(() => {
@@ -697,11 +736,18 @@ export default function App() {
     }
   }
 
-  function workspaceAction(action: "start" | "stop") {
+  function workspaceAction(action: "start" | "stop" | "restart") {
     if (!selectedId) return;
     runAction(`workspace-${action}`, async () => {
-      const outcome = await api.workspaceAction(selectedId, action);
-      setResult(outcome);
+      if (action === "restart") {
+        const stopped = await api.workspaceAction(selectedId, "stop");
+        if (stopped.failed > 0) {
+          setResult(stopped);
+          throw new Error("Some services could not be stopped. Restart all was cancelled.");
+        }
+      }
+      const outcome = await api.workspaceAction(selectedId, action === "restart" ? "start" : action);
+      setResult(action === "restart" ? { ...outcome, operation: "restart" } : outcome);
       if (action === "start") {
         const first = outcome.results.find((item) => item.outcome === "started" || item.outcome === "already_running");
         if (first) {
@@ -747,37 +793,25 @@ export default function App() {
   async function deleteService(item: Service) {
     if (
       !window.confirm(
-        `Delete “${item.name}”? Its process will be stopped first. This removes its configuration.`,
+        `Delete “${item.name}” from workspace.yaml? Stop it first if it is running.`,
       )
     )
       return;
     await runAction(`delete-${item.id}`, async () => {
-      await api.serviceAction(item.id, "stop");
-      await api.deleteService(item.id);
+      if (!configuration) throw new Error("Reload the workspace configuration first.");
+      await api.deleteService(item.id, configuration.revision);
       if (selectedServiceId === item.id) setSelectedServiceId(null);
       await loadWorkspace(item.workspace_id);
     });
   }
 
   async function deleteWorkspace(item: Workspace) {
-    const details = await Promise.all([api.services(item.id), api.shellTerminals(item.id)]).catch((error) => {
-      setError(errorMessage(error));
-      return null;
-    });
-    if (!details) return;
-    const [currentServices, currentShells] = details;
-    if (currentShells.length) {
-      setError("Close this workspace's shell terminals before deleting it.");
-      return;
-    }
-    const message = currentServices.length
-      ? `Delete “${item.name}” and its ${currentServices.length} service configuration${currentServices.length === 1 ? "" : "s"}? Every service will be stopped first.`
-      : `Delete empty workspace “${item.name}”?`;
-    if (!window.confirm(message)) return;
+    if (!window.confirm(`Delete “${item.name}” and its services? Services and shell terminals will be stopped. Its workspace configuration will be deleted.`)) return;
     await runAction("delete-workspace", async () => {
-      for (const service of currentServices) {
-        await api.serviceAction(service.id, "stop");
-        await api.deleteService(service.id);
+      const stopped = await api.workspaceAction(item.id, "stop");
+      if (stopped.failed) throw new Error("Stop all services before deleting the workspace.");
+      for (const shell of await api.shellTerminals(item.id)) {
+        await api.deleteShellTerminal(item.id, shell.id);
       }
       await api.deleteWorkspace(item.id);
       selectedRef.current = null;
@@ -796,12 +830,14 @@ export default function App() {
     setDialog(null);
   }
 
-  async function saveService(input: ServiceInput) {
+  async function saveService(input: Omit<ServiceInput, "revision">) {
     if (!selectedId) return;
+    if (!configuration) throw new Error("Reload the workspace configuration first.");
+    const body = { ...input, revision: configuration.revision };
     const saved =
       dialog?.kind === "service" && dialog.item
-        ? await api.updateService(dialog.item.id, input)
-        : await api.createService(selectedId, input);
+        ? await api.updateService(dialog.item.id, body)
+        : await api.createService(selectedId, body);
     await loadWorkspace(selectedId);
     setSelectedServiceId(saved.id);
     setDialog(null);
@@ -920,14 +956,6 @@ export default function App() {
               )}
               {workspace && workspaceView === "terminals" && <><Icon name="arrow" size={14} /><span>Terminal</span></>}
             </div>
-            <div className="topbar-right">
-              <span className="topbar-local">
-                <span
-                  className={`connection-dot ${streamState === "connected" ? "online" : ""}`}
-                />{" "}
-                LOCAL
-              </span>
-            </div>
           </header>
           <div className="content">
             {error && (
@@ -1023,7 +1051,7 @@ export default function App() {
                     <span className="eyebrow">
                       SERVICE / {workspace.name.toUpperCase()}
                     </span>
-                    <h1>{selectedService.name}</h1>
+                    <h1><span>{selectedService.name}</span><GitBranch branch={selectedService.git_branch} /></h1>
                     <div className="detail-meta">
                       <StateBadge state={selectedStatus?.state ?? "stopped"} />
                       <span className="meta-divider" />
@@ -1080,23 +1108,25 @@ export default function App() {
                     </button>
                   </div>
                 </div>
-                <div className="detail-tabs">
-                  <span className="tab active">
-                    <Icon name="logs" size={16} /> Logs
-                  </span>
+                <div className="detail-tabs" role="tablist" aria-label="Service details">
+                  <button type="button" role="tab" aria-selected={serviceDetailTab === "logs"} className={`tab ${serviceDetailTab === "logs" ? "active" : ""}`} onClick={() => setServiceDetailTab("logs")}><Icon name="logs" size={16} /> Logs</button>
+                  <button type="button" role="tab" aria-selected={serviceDetailTab === "environment"} className={`tab ${serviceDetailTab === "environment" ? "active" : ""}`} onClick={() => setServiceDetailTab("environment")}>Environment{Object.entries(envDrafts).some(([key, value]) => key.startsWith(`${workspace.id}:${selectedService.id}:`) && value.draft !== value.content) ? " •" : ""}</button>
+                  <button type="button" role="tab" aria-selected={serviceDetailTab === "traffic"} className={`tab ${serviceDetailTab === "traffic" ? "active" : ""}`} onClick={() => setServiceDetailTab("traffic")}>HTTP traffic</button>
                 </div>
                 {selectedStatus?.last_error && (
                   <div className="error-banner" role="status">
                     {selectedStatus.last_error}
                   </div>
                 )}
-                <LogViewer
+                {serviceDetailTab === "logs" && <LogViewer
                   page={page}
                   entries={entries}
                   loading={logsLoading}
                   streamState={streamState}
                   onOlder={olderLogs}
-                />
+                />}
+                <EnvironmentEditor key={`${workspace.id}:${selectedService.id}`} workspaceId={workspace.id} serviceId={selectedService.id} active={serviceDetailTab === "environment"} drafts={envDrafts} setDrafts={setEnvDrafts} selections={envSelections} setSelections={setEnvSelections} />
+                {serviceDetailTab === "traffic" && <TrafficInspector key={`${workspace.id}:${selectedService.id}`} workspaceId={workspace.id} kind="local" serviceKey={selectedService.id} ports={Object.entries(selectedService.ports ?? {}).filter(([name]) => /^(http|api|web)/i.test(name)).map(([name, number]) => ({ key: name, label: `${name} · ${number}` }))} />}
                 <div className="config-strip">
                   <div>
                     <span className="eyebrow">COMMAND</span>
@@ -1131,13 +1161,14 @@ export default function App() {
                     </p>
                   </div>
                   <div className="overview-head-actions">
-                    <button className="button primary" onClick={() => setWorkspaceView("terminals")}><Icon name="terminal" size={16} /> Terminals</button>
-                    <button className="button subtle edit-workspace" onClick={() => setDialog({ kind: "workspace", item: workspace })}><Icon name="edit" size={16} /> Edit workspace</button>
+                    <button className="button primary" onClick={() => setWorkspaceView("terminals")}><Icon name="terminal" size={17} /> Terminals</button>
+                    <button className="button subtle" onClick={() => setDialog({ kind: "configuration" })}><Icon name="file" size={17} /> Workspace YAML</button>
+                    <button className="button subtle" onClick={() => setDialog({ kind: "workspace", item: workspace })}><Icon name="edit" size={17} /> Edit workspace</button>
                   </div>
                 </div>
                 <div className="root-path">
                   <Icon name="folder" size={16} />
-                  <span title={workspace.root_path}>{workspace.root_path}</span>
+                  <span title={`${workspace.root_path}/.devorbit/workspace.yaml`}>{workspace.root_path}/.devorbit/workspace.yaml</span>
                 </div>
                 <div className="overview-cards">
                   <div className="summary-card">
@@ -1180,18 +1211,29 @@ export default function App() {
                     }
                     onClick={() => workspaceAction("start")}
                   >
-                    <Icon name="play" size={16} />
+                    <Icon name="play" size={18} />
                     {busy === "workspace-start" ? "Starting…" : "Start all"}
                   </button>
                   <button
-                    className="button subtle"
+                    className="button"
                     disabled={
-                      !!busy || workspaceLoading || services.length === 0
+                      !!busy || workspaceLoading || (status !== null && status.running_services === 0 && status.starting_services === 0 && status.stopping_services === 0)
                     }
                     onClick={() => workspaceAction("stop")}
                   >
-                    <Icon name="stop" size={16} />
+                    <Icon name="stop" size={18} />
                     {busy === "workspace-stop" ? "Stopping…" : "Stop all"}
+                  </button>
+                  <button
+                    className="button outline"
+                    disabled={
+                      !!busy || workspaceLoading || services.length === 0 ||
+                      (status !== null && status.running_services === 0 && status.starting_services === 0 && status.stopping_services === 0)
+                    }
+                    onClick={() => workspaceAction("restart")}
+                  >
+                    <Icon name="restart" size={18} />
+                    {busy === "workspace-restart" ? "Restarting…" : "Restart all"}
                   </button>
                   <span className="action-hint">
                     Running means launched, not necessarily ready.
@@ -1203,7 +1245,9 @@ export default function App() {
                       <strong>
                         {result.operation === "start"
                           ? "Start all"
-                          : "Stop all"}{" "}
+                          : result.operation === "restart"
+                            ? "Restart all"
+                            : "Stop all"}{" "}
                         results
                       </strong>
                       <span>
@@ -1240,14 +1284,13 @@ export default function App() {
                 )}
                 <div className="section-header">
                   <div>
-                    <span className="eyebrow">YOUR PROCESSES</span>
                     <h2>
                       Services{" "}
                       <span className="count-pill">{services.length}</span>
                     </h2>
                   </div>
                   <button
-                    className="button subtle"
+                    className="button"
                     onClick={() => setDialog({ kind: "service" })}
                   >
                     <Icon name="plus" size={17} /> Add service
@@ -1293,6 +1336,7 @@ export default function App() {
                       <div className="service-table-head">
                         <span>SERVICE</span>
                         <span>STATUS</span>
+                        <span title="Listening TCP ports detected from the service process and its children">PORT</span>
                         <span>COMMAND</span>
                         <span>ACTIONS</span>
                       </div>
@@ -1313,15 +1357,20 @@ export default function App() {
                               <span className="service-icon">
                                 <Icon name="terminal" size={19} />
                               </span>
-                              <span>
-                                <strong>{item.name}</strong>
-                                <small>
-                                  {item.enabled ? "Enabled" : "Disabled"}
-                                </small>
+                              <span className="service-name-copy">
+                                <span className="service-name-line"><strong>{item.name}</strong><GitBranch branch={item.git_branch} /></span>
+                                <small>{item.enabled ? "Enabled" : "Disabled"}</small>
                               </span>
                             </button>
                             <div>
                               <StateBadge state={current?.state ?? "stopped"} />
+                            </div>
+                            <div className="service-ports">
+                              {current?.state === "running" && current.listening_ports?.length
+                                ? current.listening_ports.map((port) => (
+                                    <span key={port}>:{port}</span>
+                                  ))
+                                : <span className="port-empty">—</span>}
                             </div>
                             <code title={commandLine}>{commandLine}</code>
                             <div className="row-actions">
@@ -1374,6 +1423,7 @@ export default function App() {
                     </>
                   )}
                 </div>
+                <DockerPanel key={workspace.id} workspaceId={workspace.id} />
                 <div className="workspace-footer">
                   <span>Service configurations run as your local user.</span>
                   <button
@@ -1396,12 +1446,16 @@ export default function App() {
           onClose={() => setDialog(null)}
         />
       )}
-      {dialog?.kind === "service" && (
+      {dialog?.kind === "service" && workspace && (
         <ServiceForm
           item={dialog.item}
+          workspaceRoot={workspace.root_path}
           onSave={saveService}
           onClose={() => setDialog(null)}
         />
+      )}
+      {dialog?.kind === "configuration" && workspace && configuration && (
+        <ConfigurationEditor workspaceId={workspace.id} initial={configuration} onSaved={async () => { await loadWorkspace(workspace.id); setDialog(null); }} onClose={() => setDialog(null)} />
       )}
     </>
   );

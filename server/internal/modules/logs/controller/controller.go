@@ -26,7 +26,7 @@ func (c *Controller) Service(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	if _, err := c.configs.Get(r.Context(), id); err != nil {
+	if _, err := c.configs.Identity(r.Context(), id); err != nil {
 		if configService.IsNotFound(err) {
 			writeError(w, http.StatusNotFound, "not_found", "service not found")
 		} else {

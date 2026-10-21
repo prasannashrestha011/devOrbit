@@ -4,25 +4,28 @@ use futures_util::StreamExt;
 use serde::Serialize;
 use serde_json::Value;
 use std::{
-    collections::BTreeSet, env, fs, net::IpAddr, path::PathBuf, process::Command, sync::Mutex,
+    collections::{BTreeSet, HashMap},
+    env, fs,
+    net::IpAddr,
+    path::PathBuf,
+    process::Command,
+    sync::Mutex,
     time::Duration,
 };
-use tauri::{Emitter, State};
+use tauri::{ipc::Channel, Emitter, State};
 
 mod terminal;
 
 #[derive(Default)]
 struct StreamTask(Mutex<Option<tauri::async_runtime::JoinHandle<()>>>);
 
+#[derive(Default)]
+struct DockerLogTasks(Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>);
+
 #[derive(Serialize)]
 struct Reply {
     status: u16,
     body: Value,
-}
-
-#[derive(Clone, Serialize)]
-struct Notice {
-    workspace_id: String,
 }
 
 fn backend() -> Result<(String, PathBuf), String> {
@@ -102,34 +105,73 @@ fn allowed(method: &str, path: &str) -> bool {
         ["", "api", "v1", "workspaces", wid, "services"] if id(wid) => {
             matches!(method, "GET" | "POST")
         }
+        ["", "api", "v1", "workspaces", wid, "configuration"] if id(wid) => {
+            matches!(method, "GET" | "PUT")
+        }
+        ["", "api", "v1", "workspaces", wid, "configuration", "validate"] if id(wid) => {
+            method == "POST"
+        }
         ["", "api", "v1", "workspaces", wid, action]
             if id(wid) && matches!(*action, "start" | "stop") =>
         {
             method == "POST"
         }
         ["", "api", "v1", "workspaces", wid, "status"] if id(wid) => method == "GET",
+        ["", "api", "v1", "workspaces", wid, "docker"] if id(wid) => method == "GET",
+        ["", "api", "v1", "workspaces", wid, "traffic"] if id(wid) => {
+            matches!(method, "GET" | "POST")
+        }
+        ["", "api", "v1", "workspaces", wid, "traffic", sid] if id(wid) && id(sid) => {
+            matches!(method, "GET" | "DELETE")
+        }
+        ["", "api", "v1", "workspaces", wid, "traffic", sid, "records"] if id(wid) && id(sid) => {
+            matches!(method, "GET" | "DELETE")
+        }
+        ["", "api", "v1", "workspaces", wid, "docker", "operations"] if id(wid) => method == "POST",
+        ["", "api", "v1", "workspaces", wid, "docker", "operations", oid] if id(wid) && id(oid) => {
+            matches!(method, "GET" | "DELETE")
+        }
+        ["", "api", "v1", "workspaces", wid, "docker", "terminals"] if id(wid) => method == "POST",
+        ["", "api", "v1", "workspaces", wid, "docker", "terminals", tid] if id(wid) && id(tid) => {
+            method == "DELETE"
+        }
         ["", "api", "v1", "workspaces", wid, "terminals"] if id(wid) => {
             matches!(method, "GET" | "POST")
         }
         ["", "api", "v1", "workspaces", wid, "terminals", tid] if id(wid) && id(tid) => {
             method == "DELETE"
         }
-        ["", "api", "v1", "services", sid] if id(sid) => matches!(method, "PATCH" | "DELETE"),
+        ["", "api", "v1", "services", sid] if id(sid) => {
+            matches!(method, "GET" | "PATCH" | "DELETE")
+        }
         ["", "api", "v1", "services", sid, action]
             if id(sid) && matches!(*action, "start" | "stop" | "restart") =>
         {
             method == "POST"
         }
         ["", "api", "v1", "services", sid, "logs"] if id(sid) => method == "GET",
+        ["", "api", "v1", "services", sid, "environment"] if id(sid) => method == "GET",
+        ["", "api", "v1", "services", sid, "environment", name]
+            if id(sid) && (*name == ".env" || name.starts_with(".env.") && name.len() > 5) =>
+        {
+            matches!(method, "GET" | "PUT")
+        }
         _ => false,
     };
-    if !valid || path.contains('#') || path.contains('\\') || route.contains('%') {
+    let env_file_route = matches!(
+        parts.as_slice(),
+        ["", "api", "v1", "services", _, "environment", _]
+    );
+    if !valid || path.contains('#') || path.contains('\\') || route.contains('%') && !env_file_route
+    {
         return false;
     }
     if query.is_empty() {
         return true;
     }
-    if method != "GET" {
+    if method != "GET"
+        && !(method == "DELETE" && matches!(parts.as_slice(), ["", "api", "v1", "services", _]))
+    {
         return false;
     }
     let parsed = match reqwest::Url::parse(&format!("http://127.0.0.1{path}")) {
@@ -141,6 +183,11 @@ fn allowed(method: &str, path: &str) -> bool {
             matches!(key.as_ref(), "limit" | "offset")
         }
         ["", "api", "v1", "services", _, "logs"] => matches!(key.as_ref(), "limit" | "before"),
+        ["", "api", "v1", "services", _] => key == "revision",
+        ["", "api", "v1", "workspaces", _, "docker"] => key == "file",
+        ["", "api", "v1", "workspaces", _, "traffic", _, "records"] => {
+            matches!(key.as_ref(), "after" | "limit")
+        }
         _ => false,
     })
 }
@@ -150,7 +197,7 @@ async fn api_request(method: String, path: String, body: Option<Value>) -> Resul
     if !allowed(&method, &path) {
         return Err("Unsupported DevOrbit API request".into());
     }
-    if body.is_some() && !matches!(method.as_str(), "POST" | "PATCH") {
+    if body.is_some() && !matches!(method.as_str(), "POST" | "PATCH" | "PUT") {
         return Err("Request body is not allowed for this operation".into());
     }
     let (base, token_path) = backend()?;
@@ -185,6 +232,100 @@ async fn api_request(method: String, path: String, body: Option<Value>) -> Resul
     Ok(Reply { status, body })
 }
 
+#[tauri::command]
+fn start_docker_logs(
+    workspace_id: String,
+    file: String,
+    service: String,
+    tail: u16,
+    viewer_id: String,
+    channel: Channel<Value>,
+    state: State<DockerLogTasks>,
+) -> Result<(), String> {
+    uuid::Uuid::parse_str(&workspace_id).map_err(|_| "Invalid workspace ID")?;
+    uuid::Uuid::parse_str(&viewer_id).map_err(|_| "Invalid viewer ID")?;
+    if tail == 0 || tail > 2000 || service.is_empty() || service.len() > 255 {
+        return Err("Invalid Docker log request".into());
+    }
+    let task = tauri::async_runtime::spawn(async move {
+        let result: Result<(), String> = async {
+            let (base, token_path) = backend()?;
+            let mut url = reqwest::Url::parse(&format!(
+                "{base}/api/v1/workspaces/{workspace_id}/docker/services/"
+            ))
+            .map_err(|_| "Invalid Docker log URL".to_string())?;
+            url.path_segments_mut()
+                .map_err(|_| "Invalid Docker log path")?
+                .pop_if_empty()
+                .push(&service)
+                .push("logs");
+            url.query_pairs_mut()
+                .append_pair("file", &file)
+                .append_pair("tail", &tail.to_string());
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|_| "Cannot initialize Docker log client".to_string())?;
+            let response = client
+                .get(url)
+                .bearer_auth(token(&token_path)?)
+                .send()
+                .await
+                .map_err(|_| "Docker log connection unavailable".to_string())?;
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.json::<Value>().await.unwrap_or(Value::Null);
+                return Err(body["error"]["message"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("Docker logs failed ({status})")));
+            }
+            let _ = channel.send(serde_json::json!({"stream":"status","data":"connected"}));
+            let mut chunks = response.bytes_stream();
+            let mut pending = Vec::new();
+            while let Some(chunk) = chunks.next().await {
+                let bytes = chunk.map_err(|_| "Docker log stream disconnected".to_string())?;
+                pending.extend_from_slice(&bytes);
+                while let Some(end) = pending.windows(2).position(|pair| pair == b"\n\n") {
+                    let frame: Vec<_> = pending.drain(..end + 2).collect();
+                    if let Ok(frame) = std::str::from_utf8(&frame) {
+                        if let Some(value) =
+                            frame.lines().find_map(|line| line.strip_prefix("data: "))
+                        {
+                            if let Ok(value) = serde_json::from_str::<Value>(value) {
+                                let _ = channel.send(value);
+                            }
+                        }
+                    }
+                }
+                if pending.len() > 1_048_576 {
+                    return Err("Docker log frame exceeded 1 MiB".into());
+                }
+            }
+            Err("Docker log stream ended. Refresh to reconnect.".to_string())
+        }
+        .await;
+        if let Err(problem) = result {
+            let _ = channel.send(serde_json::json!({"stream":"error","data":problem}));
+        }
+    });
+    let mut tasks = state.0.lock().map_err(|_| "Docker log state unavailable")?;
+    if let Some(previous) = tasks.insert(viewer_id, task) {
+        previous.abort();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn stop_docker_logs(viewer_id: String, state: State<DockerLogTasks>) {
+    if let Ok(mut tasks) = state.0.lock() {
+        if let Some(task) = tasks.remove(&viewer_id) {
+            task.abort();
+        }
+    }
+}
+
 async fn stream(app: tauri::AppHandle) {
     loop {
         let connection = async {
@@ -216,13 +357,8 @@ async fn stream(app: tauri::AppHandle) {
                             for line in frame.lines() {
                                 if let Some(data) = line.strip_prefix("data: ") {
                                     if let Ok(value) = serde_json::from_str::<Value>(data) {
-                                        if let Some(workspace_id) = value["workspace_id"].as_str() {
-                                            let _ = app.emit(
-                                                "backend-event",
-                                                Notice {
-                                                    workspace_id: workspace_id.into(),
-                                                },
-                                            );
+                                        if value["workspace_id"].as_str().is_some() {
+                                            let _ = app.emit("backend-event", value);
                                         }
                                     }
                                 }
@@ -273,6 +409,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(StreamTask::default())
         .manage(terminal::TerminalTasks::default())
+        .manage(DockerLogTasks::default())
         .invoke_handler(tauri::generate_handler![
             api_request,
             list_system_fonts,
@@ -285,7 +422,13 @@ fn main() {
             terminal::start_shell_terminal,
             terminal::stop_shell_terminal,
             terminal::shell_terminal_input,
-            terminal::shell_terminal_resize
+            terminal::shell_terminal_resize,
+            terminal::start_docker_terminal,
+            terminal::stop_docker_terminal,
+            terminal::docker_terminal_input,
+            terminal::docker_terminal_resize,
+            start_docker_logs,
+            stop_docker_logs
         ])
         .run(tauri::generate_context!())
         .expect("error while running DevOrbit");
@@ -310,7 +453,51 @@ mod tests {
             "GET",
             &format!("/api/v1/services/{id}/logs?limit=100")
         ));
+        assert!(allowed(
+            "GET",
+            &format!("/api/v1/services/{id}/environment")
+        ));
+        assert!(allowed(
+            "GET",
+            &format!("/api/v1/services/{id}/environment/.env")
+        ));
+        assert!(allowed(
+            "PUT",
+            &format!("/api/v1/services/{id}/environment/.env.local")
+        ));
+        assert!(allowed(
+            "GET",
+            &format!("/api/v1/services/{id}/environment/.env.local%20example")
+        ));
+        assert!(!allowed(
+            "DELETE",
+            &format!("/api/v1/services/{id}/environment/.env")
+        ));
+        assert!(!allowed(
+            "GET",
+            &format!("/api/v1/services/{id}/environment/.env?x=1")
+        ));
+        assert!(!allowed(
+            "GET",
+            &format!("/api/v1/services/{id}/environment/../logs")
+        ));
         assert!(allowed("POST", &format!("/api/v1/services/{id}/restart")));
+        assert!(allowed(
+            "GET",
+            &format!("/api/v1/workspaces/{id}/docker?file=compose.yaml")
+        ));
+        assert!(allowed(
+            "POST",
+            &format!("/api/v1/workspaces/{id}/docker/operations")
+        ));
+        assert!(allowed(
+            "GET",
+            &format!("/api/v1/workspaces/{id}/docker/operations/{id}")
+        ));
+        assert!(!allowed(
+            "POST",
+            &format!("/api/v1/workspaces/{id}/docker/evil")
+        ));
         assert!(allowed(
             "GET",
             &format!("/api/v1/workspaces/{id}/terminals")
@@ -326,6 +513,24 @@ mod tests {
         assert!(!allowed(
             "GET",
             &format!("/api/v1/workspaces/{id}/terminals/{id}/stream")
+        ));
+        assert!(allowed("POST", &format!("/api/v1/workspaces/{id}/traffic")));
+        assert!(allowed("GET", &format!("/api/v1/workspaces/{id}/traffic")));
+        assert!(allowed(
+            "DELETE",
+            &format!("/api/v1/workspaces/{id}/traffic/{id}")
+        ));
+        assert!(allowed(
+            "GET",
+            &format!("/api/v1/workspaces/{id}/traffic/{id}/records?after=1&limit=50")
+        ));
+        assert!(!allowed(
+            "POST",
+            &format!("/api/v1/workspaces/{id}/traffic/{id}/records")
+        ));
+        assert!(!allowed(
+            "GET",
+            &format!("/api/v1/workspaces/{id}/traffic/{id}/records?upstream=http://example.com")
         ));
         assert!(!allowed("GET", "http://example.com"));
         assert!(!allowed("DELETE", "/api/v1/workspaces"));

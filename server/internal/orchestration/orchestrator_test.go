@@ -310,7 +310,7 @@ func TestRealSupervisorPartialStartAndStop(t *testing.T) {
 	}}
 	o := New(fakeWorkspaces{id: {ID: id, Name: "workspace"}}, services, lifecycle, supervisor)
 	started, err := o.StartWorkspace(context.Background(), id)
-	if err != nil || started.Succeeded != 2 || started.Failed != 1 || started.Results[1].Outcome != "failed" || supervisor.Status(last).State != process.Running {
+	if err != nil || started.Succeeded != 2 || started.Failed != 1 || started.Results[0].Outcome != "failed" || supervisor.Status(last).State != process.Running {
 		t.Fatalf("partial start: %+v %v", started, err)
 	}
 	stopped, err := o.StopWorkspace(context.Background(), id)

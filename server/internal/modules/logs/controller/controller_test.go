@@ -22,24 +22,21 @@ import (
 	workspaceService "github.com/prasannashrestha011/devOrbit/internal/modules/workspace/service"
 )
 
-type services map[uuid.UUID]*serviceModel.Service
+type services map[uuid.UUID]*serviceModel.Identity
 
-func (s services) Get(_ context.Context, id uuid.UUID) (*serviceModel.Service, error) {
+func (s services) Identity(_ context.Context, id uuid.UUID) (*serviceModel.Identity, error) {
 	if v := s[id]; v != nil {
 		return v, nil
 	}
 	return nil, serviceRepo.ErrNotFound
 }
-func (services) Create(context.Context, *serviceModel.Service) error { return nil }
-func (services) List(context.Context, uuid.UUID, int, int) ([]*serviceModel.Service, error) {
-	return nil, nil
-}
-func (services) Update(context.Context, uuid.UUID, map[string]any) (*serviceModel.Service, error) {
-	return nil, nil
-}
-func (services) Delete(context.Context, uuid.UUID) error { return nil }
-func (services) NameExists(context.Context, uuid.UUID, string, uuid.UUID) (bool, error) {
-	return false, nil
+func (s services) Resolve(_ context.Context, wid uuid.UUID, key string) (*serviceModel.Identity, error) {
+	for _, item := range s {
+		if item.WorkspaceID == wid && item.Key == key {
+			return item, nil
+		}
+	}
+	return nil, serviceRepo.ErrNotFound
 }
 
 type workspaces map[uuid.UUID]*workspaceModel.Workspace
@@ -74,7 +71,7 @@ func TestLogAPI(t *testing.T) {
 	if err := capture.Close(); err != nil {
 		t.Fatal(err)
 	}
-	c := New(m, serviceService.New(services{sid: {ID: sid, WorkspaceID: wid}}, workspaces{wid: {ID: wid}}), workspaceService.New(workspaces{wid: {ID: wid}}))
+	c := New(m, serviceService.New(services{sid: {ID: sid, WorkspaceID: wid}}, workspaces{wid: {ID: wid}}), workspaceService.New(workspaces{wid: {ID: wid}}, ""))
 	handler := api.Router(slog.New(slog.NewTextHandler(io.Discard, nil)), "token", "http://127.0.0.1:7456", func(context.Context) error { return nil }, func(r chi.Router) {
 		r.Get("/services/{id}/logs", c.Service)
 		r.Get("/workspaces/{id}/logs", c.Workspace)

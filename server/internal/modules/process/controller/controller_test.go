@@ -28,26 +28,34 @@ import (
 	workspaceRepo "github.com/prasannashrestha011/devOrbit/internal/modules/workspace/repository"
 	workspaceService "github.com/prasannashrestha011/devOrbit/internal/modules/workspace/service"
 	"github.com/prasannashrestha011/devOrbit/internal/process"
+	"github.com/prasannashrestha011/devOrbit/internal/workspaceconfig"
 )
 
-type configStore map[uuid.UUID]*model.Service
+type configStore map[uuid.UUID]*model.Identity
 
-func (s configStore) Get(_ context.Context, id uuid.UUID) (*model.Service, error) {
+func (s configStore) Identity(_ context.Context, id uuid.UUID) (*model.Identity, error) {
 	if item := s[id]; item != nil {
 		return item, nil
 	}
 	return nil, configRepo.ErrNotFound
 }
-func (configStore) Create(context.Context, *model.Service) error { return nil }
-func (configStore) List(context.Context, uuid.UUID, int, int) ([]*model.Service, error) {
-	return nil, nil
+func (s configStore) Resolve(_ context.Context, wid uuid.UUID, key string) (*model.Identity, error) {
+	for _, item := range s {
+		if item.WorkspaceID == wid && item.Key == key {
+			return item, nil
+		}
+	}
+	return nil, configRepo.ErrNotFound
 }
-func (configStore) Update(context.Context, uuid.UUID, map[string]any) (*model.Service, error) {
-	return nil, nil
-}
-func (configStore) Delete(context.Context, uuid.UUID) error { return nil }
-func (configStore) NameExists(context.Context, uuid.UUID, string, uuid.UUID) (bool, error) {
-	return false, nil
+func writeConfig(t *testing.T, root, name, command string) {
+	t.Helper()
+	data, err := workspaceconfig.Encode(workspaceconfig.Config{Services: map[string]workspaceconfig.Service{name: {Command: command}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workspaceconfig.Write(root, data, ""); err != nil {
+		t.Fatal(err)
+	}
 }
 
 type workspaceStore map[uuid.UUID]*workspaceModel.Workspace
@@ -88,13 +96,13 @@ func TestServiceTerminalInputOverWebSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	wid, id := uuid.New(), uuid.New()
-	enabled := true
 	root := t.TempDir()
 	workspaces := workspaceStore{wid: {ID: wid, RootPath: root}}
-	configs := configStore{id: {ID: id, WorkspaceID: wid, Command: self, Args: []string{"-test.run=^TestHTTPChild$"}, Env: map[string]string{"DEVORBIT_HTTP_CHILD": "input"}, Enabled: &enabled}}
+	configs := configStore{id: {ID: id, WorkspaceID: wid, Key: "child"}}
+	writeConfig(t, root, "child", "env DEVORBIT_HTTP_CHILD=input "+self+" -test.run=^TestHTTPChild")
 	supervisor := process.New(50 * time.Millisecond)
 	t.Cleanup(func() { _ = supervisor.Shutdown(context.Background()) })
-	c := New(service.New(configService.New(configs, workspaces), workspaceService.New(workspaces), supervisor))
+	c := New(service.New(configService.New(configs, workspaces), workspaceService.New(workspaces, ""), supervisor))
 	handler := api.Router(slog.New(slog.NewTextHandler(io.Discard, nil)), "token", "http://127.0.0.1:7456", func(context.Context) error { return nil }, func(r chi.Router) {
 		r.Get("/services/{id}/terminal/{execution}", c.Terminal)
 	})
@@ -160,16 +168,14 @@ func TestProcessAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wid, id, disabledID := uuid.New(), uuid.New(), uuid.New()
-	enabled, disabled := true, false
-	workspaces := workspaceStore{wid: {ID: wid, RootPath: t.TempDir()}}
-	configs := configStore{
-		id:         {ID: id, WorkspaceID: wid, Command: self, Args: []string{"-test.run=^TestHTTPChild$"}, Env: map[string]string{"DEVORBIT_HTTP_CHILD": "1"}, Enabled: &enabled},
-		disabledID: {ID: disabledID, WorkspaceID: wid, Command: self, Enabled: &disabled},
-	}
+	wid, id := uuid.New(), uuid.New()
+	root := t.TempDir()
+	workspaces := workspaceStore{wid: {ID: wid, RootPath: root}}
+	configs := configStore{id: {ID: id, WorkspaceID: wid, Key: "child"}}
+	writeConfig(t, root, "child", "env DEVORBIT_HTTP_CHILD=1 "+self+" -test.run=^TestHTTPChild")
 	supervisor := process.New(100 * time.Millisecond)
 	t.Cleanup(func() { _ = supervisor.Shutdown(context.Background()) })
-	c := New(service.New(configService.New(configs, workspaces), workspaceService.New(workspaces), supervisor))
+	c := New(service.New(configService.New(configs, workspaces), workspaceService.New(workspaces, ""), supervisor))
 	handler := api.Router(slog.New(slog.NewTextHandler(io.Discard, nil)), "token", "http://127.0.0.1:7456", func(context.Context) error { return nil }, func(r chi.Router) {
 		r.Post("/services/{id}/start", c.Start)
 		r.Post("/services/{id}/stop", c.Stop)
@@ -202,9 +208,6 @@ func TestProcessAPI(t *testing.T) {
 		{http.MethodGet, "/api/v1/services/" + uuid.NewString() + "/status", "token", 404, ""},
 		{http.MethodPost, "/api/v1/services/" + uuid.NewString() + "/stop", "token", 404, ""},
 		{http.MethodPost, "/api/v1/services/" + uuid.NewString() + "/restart", "token", 404, ""},
-		{http.MethodPost, "/api/v1/services/" + disabledID.String() + "/start", "token", 409, ""},
-		{http.MethodPost, "/api/v1/services/" + disabledID.String() + "/restart", "token", 409, ""},
-		{http.MethodPost, "/api/v1/services/" + disabledID.String() + "/stop", "token", 200, ""},
 		{http.MethodGet, base + "/status", "token", 200, process.Stopped},
 		{http.MethodPost, base + "/start", "token", 202, process.Running},
 		{http.MethodPost, base + "/start", "token", 409, ""},
@@ -241,7 +244,10 @@ func TestProcessAPI(t *testing.T) {
 	if w := request(http.MethodPost, base+"/stop", "token"); w.Code != http.StatusOK {
 		t.Fatalf("repeat stop: %d %s", w.Code, w.Body.String())
 	}
-	configs[id].Command = "missing-devorbit-executable"
+	snapshot, _ := workspaceconfig.Read(root)
+	if _, err := workspaceconfig.Write(root, []byte("services:\n  child:\n    command: missing-devorbit-executable\n"), snapshot.Revision); err != nil {
+		t.Fatal(err)
+	}
 	if w := request(http.MethodPost, base+"/restart", "token"); w.Code != http.StatusBadRequest {
 		t.Fatalf("restart should use current config: %d %s", w.Code, w.Body.String())
 	}
@@ -253,12 +259,13 @@ func TestTerminalWebSocketAuthenticationAndScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	wid, id := uuid.New(), uuid.New()
-	enabled := true
-	workspaces := workspaceStore{wid: {ID: wid, RootPath: t.TempDir()}}
-	configs := configStore{id: {ID: id, WorkspaceID: wid, Command: self, Args: []string{"-test.run=^TestHTTPChild$"}, Env: map[string]string{"DEVORBIT_HTTP_CHILD": "1"}, Enabled: &enabled}}
+	root := t.TempDir()
+	workspaces := workspaceStore{wid: {ID: wid, RootPath: root}}
+	configs := configStore{id: {ID: id, WorkspaceID: wid, Key: "child"}}
+	writeConfig(t, root, "child", "env DEVORBIT_HTTP_CHILD=1 "+self+" -test.run=^TestHTTPChild")
 	supervisor := process.New(50 * time.Millisecond)
 	t.Cleanup(func() { _ = supervisor.Shutdown(context.Background()) })
-	c := New(service.New(configService.New(configs, workspaces), workspaceService.New(workspaces), supervisor))
+	c := New(service.New(configService.New(configs, workspaces), workspaceService.New(workspaces, ""), supervisor))
 	handler := api.Router(slog.New(slog.NewTextHandler(io.Discard, nil)), "token", "http://127.0.0.1:7456", func(context.Context) error { return nil }, func(r chi.Router) {
 		r.Get("/services/{id}/terminal/{execution}", c.Terminal)
 	})

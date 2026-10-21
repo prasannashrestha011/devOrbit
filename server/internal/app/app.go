@@ -18,6 +18,7 @@ import (
 	"github.com/prasannashrestha011/devOrbit/internal/events"
 	"github.com/prasannashrestha011/devOrbit/internal/logs"
 	serviceModel "github.com/prasannashrestha011/devOrbit/internal/modules/serviceconfiguration/model"
+	"github.com/prasannashrestha011/devOrbit/internal/modules/traffic_inspector"
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/model"
 	workspaceRepo "github.com/prasannashrestha011/devOrbit/internal/modules/workspace/repository"
 	workspaceService "github.com/prasannashrestha011/devOrbit/internal/modules/workspace/service"
@@ -25,6 +26,8 @@ import (
 	"github.com/prasannashrestha011/devOrbit/internal/routes"
 	"github.com/prasannashrestha011/devOrbit/internal/security"
 	"github.com/prasannashrestha011/devOrbit/internal/shellterminal"
+	"github.com/prasannashrestha011/devOrbit/internal/workspaceconfig"
+	"gorm.io/gorm"
 )
 
 func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
@@ -47,8 +50,16 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		return errors.New("database pool unavailable")
 	}
 	defer sqlDB.Close()
-	if err := database.Migrate(db, &model.Workspace{}, &serviceModel.Service{}); err != nil {
+	if err := database.Migrate(db, &model.Workspace{}, &serviceModel.Identity{}); err != nil {
 		return err
+	}
+	if db.Migrator().HasTable("services") {
+		if err := db.Migrator().DropTable("services"); err != nil {
+			return fmt.Errorf("remove legacy services table: %w", err)
+		}
+	}
+	if err := initializeWorkspaceYAML(db, log); err != nil {
+		return fmt.Errorf("initialize workspace YAML: %w", err)
 	}
 	token, err := security.LoadOrCreateToken(cfg.AuthTokenPath)
 	if err != nil {
@@ -57,6 +68,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	address := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
 	broker := events.New()
 	defer broker.Close()
+	traffic := traffic_inspector.New(broker)
 	stopEvents := context.AfterFunc(ctx, broker.Close)
 	defer stopEvents()
 	manager, err := logs.New(cfg.LogDir, broker)
@@ -65,10 +77,13 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	}
 	supervisor := process.New(cfg.ShutdownTimeout, manager)
 	supervisor.SetBroker(broker)
-	terminals := shellterminal.New(workspaceService.New(workspaceRepo.New(db)), cfg.ShutdownTimeout)
+	terminals := shellterminal.New(workspaceService.New(workspaceRepo.New(db), cfg.DataDir), cfg.ShutdownTimeout)
+	dockerTerminals := process.New(cfg.ShutdownTimeout)
 	server := &http.Server{
-		Addr:              address,
-		Handler:           localHost(address, api.Router(log, token, "http://"+address, sqlDB.PingContext, func(r chi.Router) { routes.Register(r, db, supervisor, manager, broker, terminals) })),
+		Addr: address,
+		Handler: localHost(address, api.Router(log, token, "http://"+address, sqlDB.PingContext, func(r chi.Router) {
+			routes.Register(r, db, supervisor, manager, broker, cfg.DataDir, dockerTerminals, traffic, address, terminals)
+		})),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -84,9 +99,43 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	serveErr := serve(ctx, server, listener, cfg.ShutdownTimeout)
 	shutdownCtx, stop := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer stop()
-	processErr := errors.Join(supervisor.Shutdown(shutdownCtx), terminals.Shutdown(shutdownCtx))
+	traffic.Close(shutdownCtx)
+	processErr := errors.Join(supervisor.Shutdown(shutdownCtx), terminals.Shutdown(shutdownCtx), dockerTerminals.Shutdown(shutdownCtx))
 	logErr := manager.Close()
 	return errors.Join(serveErr, processErr, logErr)
+}
+
+func initializeWorkspaceYAML(db *gorm.DB, log *slog.Logger) error {
+	var workspaces []model.Workspace
+	if err := db.Find(&workspaces).Error; err != nil {
+		return err
+	}
+	for _, workspace := range workspaces {
+		if err := ensureWorkspaceYAML(workspace.RootPath); err != nil {
+			log.Warn("workspace YAML unavailable", "workspace_id", workspace.ID, "error", err)
+		}
+	}
+	return nil
+}
+
+func ensureWorkspaceYAML(root string) error {
+	info, err := os.Stat(root)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("workspace root %s is not a directory", root)
+	}
+	if _, err := workspaceconfig.ReadRaw(root); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	_, err = workspaceconfig.Write(root, []byte("services: {}\n"), "")
+	if errors.Is(err, workspaceconfig.ErrConflict) {
+		return nil
+	}
+	return err
 }
 
 func localHost(address string, next http.Handler) http.Handler {

@@ -17,6 +17,8 @@ const (
 	ProcessFailed    Type = "process.failed"
 	ProcessRestarted Type = "process.restarted"
 	LogCreated       Type = "log.created"
+	TrafficCompleted Type = "traffic.completed"
+	TrafficSession   Type = "traffic.session"
 )
 
 type Event struct {

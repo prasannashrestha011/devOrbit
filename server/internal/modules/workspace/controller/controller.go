@@ -11,16 +11,20 @@ import (
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/dto"
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/repository"
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/service"
+	"github.com/prasannashrestha011/devOrbit/internal/process"
 	"github.com/prasannashrestha011/devOrbit/internal/shellterminal"
+	"github.com/prasannashrestha011/devOrbit/internal/workspaceconfig"
 )
 
 type Controller struct {
 	service   *service.Service
 	terminals *shellterminal.Manager
+	runtime   *process.Supervisor
+	OnDelete  func(uuid.UUID)
 }
 
-func New(s *service.Service, terminals ...*shellterminal.Manager) *Controller {
-	c := &Controller{service: s}
+func New(s *service.Service, runtime *process.Supervisor, terminals ...*shellterminal.Manager) *Controller {
+	c := &Controller{service: s, runtime: runtime}
 	if len(terminals) > 0 {
 		c.terminals = terminals[0]
 	}
@@ -91,6 +95,14 @@ func (c *Controller) Delete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if c.runtime != nil {
+		for _, status := range c.runtime.WorkspaceStatuses(id) {
+			if status.State == process.Running || status.State == process.Starting || status.State == process.Stopping {
+				writeError(w, http.StatusConflict, "conflict", "stop workspace services before deleting the workspace")
+				return
+			}
+		}
+	}
 	var err error
 	if c.terminals != nil {
 		err = c.terminals.DeleteWorkspace(r.Context(), id)
@@ -100,6 +112,9 @@ func (c *Controller) Delete(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeOperationError(w, err)
 		return
+	}
+	if c.OnDelete != nil {
+		c.OnDelete(id)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -125,6 +140,10 @@ func writeOperationError(w http.ResponseWriter, err error) {
 	}
 	if errors.Is(err, repository.ErrConflict) {
 		writeError(w, http.StatusConflict, "conflict", "workspace contains services")
+		return
+	}
+	if errors.Is(err, workspaceconfig.ErrConflict) {
+		writeError(w, http.StatusConflict, "conflict", err.Error())
 		return
 	}
 	if errors.Is(err, shellterminal.ErrHasSessions) {
