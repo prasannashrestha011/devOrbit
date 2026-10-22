@@ -12,9 +12,10 @@ use std::{
     sync::Mutex,
     time::Duration,
 };
-use tauri::{ipc::Channel, Emitter, State};
+use tauri::{ipc::Channel, Emitter, Manager, State};
 
 mod terminal;
+mod traffic;
 
 #[derive(Default)]
 struct StreamTask(Mutex<Option<tauri::async_runtime::JoinHandle<()>>>);
@@ -126,6 +127,11 @@ fn allowed(method: &str, path: &str) -> bool {
         }
         ["", "api", "v1", "workspaces", wid, "traffic", sid, "records"] if id(wid) && id(sid) => {
             matches!(method, "GET" | "DELETE")
+        }
+        ["", "api", "v1", "workspaces", wid, "traffic", sid, "records", rid]
+            if id(wid) && id(sid) && id(rid) =>
+        {
+            method == "GET"
         }
         ["", "api", "v1", "workspaces", wid, "docker", "operations"] if id(wid) => method == "POST",
         ["", "api", "v1", "workspaces", wid, "docker", "operations", oid] if id(wid) && id(oid) => {
@@ -404,14 +410,45 @@ fn stop_events(state: State<StreamTask>) {
     }
 }
 
+#[tauri::command]
+async fn open_quick_controls(app: tauri::AppHandle) -> Result<(), String> {
+    let window = match app.get_webview_window("quick-controls") {
+        Some(window) => window,
+        None => tauri::WebviewWindowBuilder::new(
+            &app,
+            "quick-controls",
+            tauri::WebviewUrl::App("index.html#quick-controls".into()),
+        )
+        .title("DevOrbit quick controls")
+        .inner_size(340.0, 360.0)
+        .min_inner_size(280.0, 120.0)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .build()
+        .map_err(|error| error.to_string())?,
+    };
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(StreamTask::default())
         .manage(terminal::TerminalTasks::default())
         .manage(DockerLogTasks::default())
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                if let Some(controls) = window.get_webview_window("quick-controls") {
+                    let _ = controls.close();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
+            open_quick_controls,
             api_request,
+            traffic::download_traffic_body,
             list_system_fonts,
             start_events,
             stop_events,
@@ -531,6 +568,18 @@ mod tests {
         assert!(!allowed(
             "GET",
             &format!("/api/v1/workspaces/{id}/traffic/{id}/records?upstream=http://example.com")
+        ));
+        assert!(allowed(
+            "GET",
+            &format!("/api/v1/workspaces/{id}/traffic/{id}/records/{id}")
+        ));
+        assert!(!allowed(
+            "POST",
+            &format!("/api/v1/workspaces/{id}/traffic/{id}/records/{id}")
+        ));
+        assert!(!allowed(
+            "GET",
+            &format!("/api/v1/workspaces/{id}/traffic/{id}/records/../secret")
         ));
         assert!(!allowed("GET", "http://example.com"));
         assert!(!allowed("DELETE", "/api/v1/workspaces"));

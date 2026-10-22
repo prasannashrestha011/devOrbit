@@ -41,7 +41,6 @@ const service = {
   working_directory: "",
   git_branch: "",
   env: {},
-  ports: {},
   enabled: true,
   auto_restart: false,
   created_at: "",
@@ -115,6 +114,8 @@ beforeEach(() => {
         return { status: 201, body: { ...service, ...(args.body as object) } };
       if (args.path === `/api/v1/workspaces/${wid}/status`)
         return { status: 200, body: currentStatus };
+      if (args.path === `/api/v1/workspaces/${wid}/traffic` && args.method === "GET")
+        return { status: 200, body: [] };
       if (args.path === `/api/v1/workspaces/${wid}/docker` && args.method === "GET")
         return { status: 200, body: dockerSnapshot };
       if (args.path === `/api/v1/workspaces/${wid}/terminals` && args.method === "GET")
@@ -217,6 +218,35 @@ it("lists detected Docker services in the workspace overview when the Engine is 
   expect(section.textContent).toContain("postgres:16");
 });
 
+it.each(["ready", "engine_unavailable"])("opens a workspace containing a Docker service with null ports (%s)", async (state) => {
+  const other = { ...workspace, id: tid, name: "Docker Worker" };
+  const handleRequest = invoke.getMockImplementation()!;
+  invoke.mockImplementation(async (command, args) => {
+    if (command === "api_request") {
+      if (args.path.startsWith("/api/v1/workspaces?")) return { status: 200, body: [workspace, other] };
+      if (args.path === `/api/v1/workspaces/${tid}/docker`) return {
+        status: 200,
+        body: {
+          availability: { state, message: "Docker status" },
+          candidates: [{ file: "compose.yaml", files: ["compose.yaml"] }],
+          project: { file: "compose.yaml", files: ["compose.yaml"], name: "worker-project", created: 0, running: 0, stopped: 0,
+            services: [{ name: "worker", image: "worker:latest", build: false, ports: null, containers: [] }] },
+        },
+      };
+      if (args.path.startsWith(`/api/v1/workspaces/${tid}/`)) return handleRequest(command, { ...args, path: args.path.replace(tid, wid) });
+    }
+    return handleRequest(command, args);
+  });
+  render(<App />);
+  await screen.findByText("API server");
+  fireEvent.click(screen.getByRole("button", { name: other.name }));
+  await screen.findByRole("heading", { name: "worker" });
+  expect(screen.getByRole("heading", { name: other.name })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Show details for worker" }));
+  expect(screen.getByText("No containers have been created for this service.")).toBeTruthy();
+  expect(screen.getByRole("region", { name: "Docker Compose" }).querySelector(".docker-port-value")?.textContent).toBe("—");
+});
+
 it("lists installed fonts and keeps the chosen font across service switches", async () => {
   currentServices = [service, { ...service, id: tid, name: "Worker" }];
   render(<App />);
@@ -276,8 +306,8 @@ it("restarts the workspace by stopping before starting", async () => {
 
 it("shows detected listening ports only for running services in the overview", async () => {
   currentServices = [
-    { ...service, ports: { http: 1234 } },
-    { ...service, id: tid, name: "Worker", ports: { http: 3000 } },
+    service,
+    { ...service, id: tid, name: "Worker" },
   ];
   currentStatus = {
     ...status,
@@ -291,8 +321,31 @@ it("shows detected listening ports only for running services in the overview", a
   expect(await screen.findByText(":8080")).toBeTruthy();
   expect(screen.getByText(":9090")).toBeTruthy();
   expect(screen.queryByText(":3000")).toBeNull();
-  expect(screen.queryByText(":1234")).toBeNull();
   expect(screen.getByText("PORT").getAttribute("title")).toContain("Listening TCP ports");
+});
+
+it("offers detected listening ports for local HTTP inspection only while running", async () => {
+  currentServices = [service, { ...service, id: tid, name: "Worker" }];
+  currentStatus = {
+    ...status,
+    services: [
+      { ...process, state: "running", name: service.name, enabled: true, listening_ports: [8080, 9090] },
+      { ...process, service_id: tid, name: "Worker", enabled: true, listening_ports: [3000] },
+    ],
+  };
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: /API server Enabled/ }));
+  fireEvent.click(screen.getByRole("tab", { name: "HTTP traffic" }));
+  const select = await screen.findByRole("combobox", { name: "HTTP port" });
+  expect([...select.querySelectorAll("option")].map((item) => item.value)).toEqual(["8080", "9090"]);
+  fireEvent.change(select, { target: { value: "9090" } });
+  expect((select as HTMLSelectElement).value).toBe("9090");
+  expect(screen.getByRole("button", { name: "Inspect HTTP traffic" }).hasAttribute("disabled")).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Workspace overview" }));
+  fireEvent.click(screen.getByRole("button", { name: /Worker Enabled/ }));
+  fireEvent.click(screen.getByRole("tab", { name: "HTTP traffic" }));
+  expect(await screen.findByRole("option", { name: "No HTTP port available" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Inspect HTTP traffic" }).hasAttribute("disabled")).toBe(true);
 });
 
 it("cancels restart all when a service cannot be stopped", async () => {
@@ -456,12 +509,14 @@ it("saves a browsed service directory outside the workspace as an absolute path"
 it("saves a typed command line as separate executable and arguments", async () => {
   render(<App />);
   fireEvent.click(await screen.findByRole("button", { name: "Add service" }));
+  expect(screen.queryByRole("textbox", { name: /Expected ports/ })).toBeNull();
   fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Flutter" } });
   fireEvent.change(screen.getByRole("textbox", { name: "Command" }), { target: { value: "flutter run -d linux" } });
   fireEvent.submit(screen.getByRole("dialog", { name: "Add a service" }));
   await waitFor(() => expect(calls).toContain(`POST /api/v1/workspaces/${wid}/services`));
   const request = invoke.mock.calls.find(([, args]) => args?.path === `/api/v1/workspaces/${wid}/services` && args.method === "POST");
   expect(request?.[1].body).toMatchObject({ command: "flutter", args: ["run", "-d", "linux"] });
+  expect(request?.[1].body).not.toHaveProperty("ports");
 });
 
 it("creates and closes an independent workspace shell through the same viewport", async () => {

@@ -4,6 +4,7 @@ import DockerPanel from "./DockerPanel";
 import YamlSource from "./YamlSource";
 import EnvironmentEditor, { type EnvDraft } from "./EnvironmentEditor";
 import TrafficInspector from "./TrafficInspector";
+import { selectedWorkspaceKey } from "./QuickControls";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { homeDir } from "@tauri-apps/api/path";
@@ -20,6 +21,7 @@ import {
   Pencil,
   Play,
   Plus,
+  PictureInPicture2,
   RotateCw,
   Search,
   Settings,
@@ -67,6 +69,7 @@ const icons = {
   search: Search,
   pulse: Activity,
   terminal: Terminal,
+  floating: PictureInPicture2,
 };
 
 function Icon({ name, size = 18 }: { name: keyof typeof icons; size?: number }) {
@@ -233,11 +236,6 @@ function ServiceForm({
     item ? formatCommandLine([item.command, ...item.args]) : "",
   );
   const [directory, setDirectory] = useState(item?.working_directory ?? "");
-  const [ports, setPorts] = useState(
-    Object.entries(item?.ports ?? {})
-      .map(([k, v]) => `${k}=${v}`)
-      .join("\n"),
-  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   return (
@@ -258,16 +256,6 @@ function ServiceForm({
         onSubmit={async (event) => {
           event.preventDefault();
           setError("");
-          const namedPorts: Record<string, number> = {};
-          for (const line of ports.split("\n").filter((line) => line.trim())) {
-            const at = line.indexOf("=");
-            const port = Number(line.slice(at + 1));
-            if (at < 1 || !Number.isInteger(port) || port < 1 || port > 65535) {
-              setError("Use name=port (1–65535) for each port.");
-              return;
-            }
-            namedPorts[line.slice(0, at)] = port;
-          }
           setSaving(true);
           try {
             const [command, ...args] = parseCommandLine(commandLine);
@@ -280,7 +268,6 @@ function ServiceForm({
               command,
               args,
               working_directory: workingDirectory,
-              ports: namedPorts,
             });
           } catch (error) {
             setError(errorMessage(error));
@@ -351,17 +338,6 @@ function ServiceForm({
           </div>
           <small>Folders inside the workspace are saved as relative paths. Other folders are saved as absolute paths.</small>
         </div>
-        <label>
-          Expected ports <span className="label-note">one name=port per line</span>
-          <textarea
-            className="mono"
-            rows={3}
-            value={ports}
-            onChange={(e) => setPorts(e.target.value)}
-            placeholder="http=8080"
-          />
-          <small>Ports are informational; DevOrbit does not bind or inject them.</small>
-        </label>
         {error && (
           <p className="form-error" role="alert">
             {error}
@@ -615,6 +591,12 @@ export default function App() {
       .then(setTerminalFonts)
       .catch((error) => setError(errorMessage(error)));
   }, []);
+
+  useEffect(() => {
+    if (loading) return;
+    if (selectedId) localStorage.setItem(selectedWorkspaceKey, selectedId);
+    else localStorage.removeItem(selectedWorkspaceKey);
+  }, [selectedId, loading]);
 
   useEffect(() => {
     setSelectedServiceId(null);
@@ -956,6 +938,9 @@ export default function App() {
               )}
               {workspace && workspaceView === "terminals" && <><Icon name="arrow" size={14} /><span>Terminal</span></>}
             </div>
+            <button className="button subtle" disabled={!workspace} onClick={() => invoke("open_quick_controls").catch((problem) => setError(errorMessage(problem)))}>
+              <Icon name="floating" size={17} /> Quick controls
+            </button>
           </header>
           <div className="content">
             {error && (
@@ -1126,7 +1111,7 @@ export default function App() {
                   onOlder={olderLogs}
                 />}
                 <EnvironmentEditor key={`${workspace.id}:${selectedService.id}`} workspaceId={workspace.id} serviceId={selectedService.id} active={serviceDetailTab === "environment"} drafts={envDrafts} setDrafts={setEnvDrafts} selections={envSelections} setSelections={setEnvSelections} />
-                {serviceDetailTab === "traffic" && <TrafficInspector key={`${workspace.id}:${selectedService.id}`} workspaceId={workspace.id} kind="local" serviceKey={selectedService.id} ports={Object.entries(selectedService.ports ?? {}).filter(([name]) => /^(http|api|web)/i.test(name)).map(([name, number]) => ({ key: name, label: `${name} · ${number}` }))} />}
+                {serviceDetailTab === "traffic" && <TrafficInspector key={`traffic:${workspace.id}:${selectedService.id}`} workspaceId={workspace.id} kind="local" serviceKey={selectedService.id} ports={selectedStatus?.state === "running" ? (selectedStatus.listening_ports ?? []).map((port) => ({ key: String(port), label: String(port) })) : []} />}
                 <div className="config-strip">
                   <div>
                     <span className="eyebrow">COMMAND</span>
