@@ -3,7 +3,7 @@ package traffic_inspector
 import (
 	"context"
 	"errors"
-	"strings"
+	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/prasannashrestha011/devOrbit/internal/process"
@@ -18,14 +18,15 @@ func (r Resolver) resolveLocal(ctx context.Context, target Target) (Target, int,
 	if err != nil || service == nil || service.WorkspaceID != target.WorkspaceID {
 		return Target{}, 0, errors.New("service not found in workspace")
 	}
-	if r.Processes.Status(serviceID).State != process.Running {
+	status := r.Processes.Status(serviceID)
+	if status.State != process.Running {
 		return Target{}, 0, errors.New("start the service before inspecting traffic")
 	}
 
 	available := map[string]int{}
-	for name, port := range service.Ports {
-		if httpPortName(name) {
-			available[name] = port
+	if status.PID != nil {
+		for _, port := range process.ListeningPorts(*status.PID) {
+			available[strconv.Itoa(port)] = port
 		}
 	}
 
@@ -36,9 +37,4 @@ func (r Resolver) resolveLocal(ctx context.Context, target Target) (Target, int,
 	target.PortKey = portKey
 	target.File = ""
 	return target, port, nil
-}
-
-func httpPortName(name string) bool {
-	name = strings.ToLower(name)
-	return strings.HasPrefix(name, "http") || name == "web" || name == "api"
 }

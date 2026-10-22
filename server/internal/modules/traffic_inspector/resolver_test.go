@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"testing"
 
@@ -14,10 +15,14 @@ import (
 	"github.com/prasannashrestha011/devOrbit/internal/modules/dockercompose"
 	serviceModel "github.com/prasannashrestha011/devOrbit/internal/modules/serviceconfiguration/model"
 	workspaceModel "github.com/prasannashrestha011/devOrbit/internal/modules/workspace/model"
+	"github.com/prasannashrestha011/devOrbit/internal/process"
 	"github.com/prasannashrestha011/devOrbit/internal/workspaceconfig"
 )
 
 func TestResolveLocalPortSelection(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("listening port detection is unsupported on this platform")
+	}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodHead || r.URL.Path != "/" {
 			t.Errorf("probe must use HEAD / without following redirects: %s %s", r.Method, r.URL)
@@ -31,30 +36,45 @@ func TestResolveLocalPortSelection(t *testing.T) {
 	address, _ := url.Parse(upstream.URL)
 	port, _ := strconv.Atoi(address.Port())
 	workspaceID, serviceID := uuid.New(), uuid.New()
+	pid := os.Getpid()
 
 	for _, test := range []struct {
-		name    string
-		ports   map[string]int
-		portKey string
-		apiHost string
-		wantKey string
-		wantErr string
+		name      string
+		extraPort bool
+		noPID     bool
+		stopped   bool
+		portKey   string
+		apiHost   string
+		wantKey   string
+		wantErr   string
 	}{
-		{name: "automatic HTTP port", ports: map[string]int{"http": port, "db": 5432}, wantKey: "http"},
-		{name: "explicit port", ports: map[string]int{"http": port, "api": port}, portKey: "api", wantKey: "api"},
-		{name: "ambiguous ports", ports: map[string]int{"http": port, "api": port}, wantErr: "multiple HTTP ports; select one"},
-		{name: "unknown port", ports: map[string]int{"http": port}, portKey: "web", wantErr: `HTTP port "web" not found`},
-		{name: "non HTTP port", ports: map[string]int{"db": 5432}, wantErr: "no HTTP port available"},
-		{name: "invalid port", ports: map[string]int{"http": 65536}, wantErr: "invalid HTTP port"},
-		{name: "DevOrbit API", ports: map[string]int{"http": port}, apiHost: address.Host, wantErr: "cannot inspect the DevOrbit API"},
+		{name: "automatic detected port", wantKey: address.Port()},
+		{name: "explicit detected port", extraPort: true, portKey: address.Port(), wantKey: address.Port()},
+		{name: "ambiguous ports", extraPort: true, wantErr: "multiple HTTP ports; select one"},
+		{name: "undetected port", portKey: "65536", wantErr: `HTTP port "65536" not found`},
+		{name: "legacy port name", portKey: "http", wantErr: `HTTP port "http" not found`},
+		{name: "no process PID", noPID: true, wantErr: "no HTTP port available"},
+		{name: "stopped process", stopped: true, wantErr: "start the service before inspecting traffic"},
+		{name: "DevOrbit API", apiHost: address.Host, wantErr: "cannot inspect the DevOrbit API"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			if test.extraPort {
+				extra := httptest.NewServer(http.NotFoundHandler())
+				defer extra.Close()
+			}
+			status := process.Status{State: process.Running, PID: &pid}
+			if test.noPID {
+				status.PID = nil
+			}
+			if test.stopped {
+				status.State = process.Stopped
+			}
 			resolver := Resolver{
 				Workspaces: workspaceStub{workspaceID},
 				Services: serviceStub{&serviceModel.Service{
-					ID: serviceID, WorkspaceID: workspaceID, Ports: test.ports,
+					ID: serviceID, WorkspaceID: workspaceID,
 				}},
-				Processes: processStub{},
+				Processes: processStub{status},
 				APIHost:   test.apiHost,
 			}
 			target := Target{WorkspaceID: workspaceID, Kind: "local", ServiceKey: serviceID.String(), PortKey: test.portKey, File: "ignored.yaml"}
