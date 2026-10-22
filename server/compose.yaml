@@ -2,6 +2,8 @@ services:
   devorbit-db:
     image: postgres:17
     container_name: devorbit-db
+    restart: unless-stopped
+    stop_grace_period: 30s
     environment:
       POSTGRES_DB: devorbit
       POSTGRES_USER: devorbit
@@ -15,6 +17,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+      start_period: 10s
 
 volumes:
   postgres_data:
