@@ -17,7 +17,6 @@ export type Service = {
   working_directory: string;
   git_branch: string;
   env: Record<string, string>;
-  ports: Record<string, number>;
   enabled: boolean;
   auto_restart: boolean;
   created_at: string;
@@ -88,7 +87,7 @@ export type LogPage = {
   next_cursor: string;
   diagnostics: { dropped_entries: number; storage_errors: number };
 };
-export type ServiceInput = Pick<Service, "name" | "command" | "args" | "working_directory" | "ports"> & { revision: string };
+export type ServiceInput = Pick<Service, "name" | "command" | "args" | "working_directory"> & { revision: string };
 export type WorkspaceConfiguration = { content: string; revision: string };
 export type EnvFile = { name: string; content: string; revision: string };
 export type WorkspaceInput = Pick<
@@ -109,7 +108,10 @@ export type DockerAction = "up" | "start" | "stop" | "restart" | "down" | "build
 export type DockerOperation = { id: string; workspace_id: string; action: DockerAction; state: "running" | "succeeded" | "failed"; error?: string; updated_at: string };
 export type DockerTerminal = { id: string; workspace_id: string; container_id: string; container_name: string; shell: string; state: ProcessState };
 export type TrafficSession = { id: string; target: { workspace_id: string; kind: "local" | "docker"; service_key: string; port_key: string; file?: string }; upstream: string; proxy_url: string; state: string; started_at: string };
-export type TrafficRecord = { id: string; session_id: string; sequence: number; started_at: string; method: string; path: string; status_code: number; duration_ms: number; request_bytes?: number; response_bytes: number; outcome: string; error?: string };
+export type TrafficRecord = { id: string; session_id: string; sequence: number; started_at: string; method: string; path: string; status_code: number; duration_ms: number; request_bytes?: number; response_bytes: number; outcome: string; error?: string; capture_incomplete?: boolean; capture_error?: string };
+export type TrafficMessage = { protocol: string; status?: string; headers: Record<string, string[]> | null; trailers: Record<string, string[]> | null; transfer_encoding?: string[]; body: { bytes: number; captured_bytes: number; complete: boolean; error?: string } };
+export type TrafficPreview = { text: string; binary: boolean; truncated: boolean; error?: string; fields?: { name: string; value: string; filename?: string; content_type?: string }[] };
+export type TrafficExchange = TrafficRecord & { host: string; raw_query: string; request: TrafficMessage; response: TrafficMessage; request_preview: TrafficPreview; response_preview: TrafficPreview };
 export type TrafficPage = { records: TrafficRecord[]; latest_sequence: number; gap: boolean };
 
 type Reply = { status: number; body: unknown };
@@ -174,7 +176,11 @@ export const api = {
     request<null>("DELETE", `/api/v1/workspaces/${id}`),
   workspaceStatus: (id: string) =>
     request<WorkspaceStatus>("GET", `/api/v1/workspaces/${id}/status`),
-  dockerSnapshot: (id: string, file?: string) => request<DockerSnapshot>("GET", `/api/v1/workspaces/${id}/docker${file ? `?file=${encodeURIComponent(file)}` : ""}`),
+  dockerSnapshot: async (id: string, file?: string) => {
+    const snapshot = await request<DockerSnapshot>("GET", `/api/v1/workspaces/${id}/docker${file ? `?file=${encodeURIComponent(file)}` : ""}`);
+    for (const service of snapshot.project?.services ?? []) service.ports ??= [];
+    return snapshot;
+  },
   dockerAction: (id: string, file: string, action: DockerAction, service = "") => request<DockerOperation>("POST", `/api/v1/workspaces/${id}/docker/operations`, { file, action, service }),
   dockerOperation: (id: string, operationId: string) => request<DockerOperation>("GET", `/api/v1/workspaces/${id}/docker/operations/${operationId}`),
   cancelDockerOperation: (id: string, operationId: string) => request<DockerOperation>("DELETE", `/api/v1/workspaces/${id}/docker/operations/${operationId}`),
@@ -216,5 +222,7 @@ export const api = {
   startTraffic: (workspaceId: string, target: { kind: "local" | "docker"; service_key: string; port_key: string; file?: string }) => request<TrafficSession>("POST", `/api/v1/workspaces/${workspaceId}/traffic`, target),
   stopTraffic: (workspaceId: string, sessionId: string) => request<null>("DELETE", `/api/v1/workspaces/${workspaceId}/traffic/${sessionId}`),
   trafficRecords: (workspaceId: string, sessionId: string, after = 0) => request<TrafficPage>("GET", `/api/v1/workspaces/${workspaceId}/traffic/${sessionId}/records?after=${after}`),
+  trafficExchange: (workspaceId: string, sessionId: string, recordId: string) => request<TrafficExchange>("GET", `/api/v1/workspaces/${workspaceId}/traffic/${sessionId}/records/${recordId}`),
+  downloadTrafficBody: (workspaceId: string, sessionId: string, recordId: string, side: "request" | "response") => invoke<string | null>("download_traffic_body", { workspaceId, sessionId, recordId, side }),
   clearTraffic: (workspaceId: string, sessionId: string) => request<null>("DELETE", `/api/v1/workspaces/${workspaceId}/traffic/${sessionId}/records`),
 };

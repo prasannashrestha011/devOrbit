@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	workspaceRepo "github.com/prasannashrestha011/devOrbit/internal/modules/workspace/repository"
 	"github.com/prasannashrestha011/devOrbit/internal/orchestration"
 	"github.com/prasannashrestha011/devOrbit/internal/process"
+	"github.com/prasannashrestha011/devOrbit/internal/workspaceconfig"
 )
 
 type orchestrationWorkspaces map[uuid.UUID]*workspaceModel.Workspace
@@ -27,6 +29,14 @@ func (s orchestrationWorkspaces) Get(_ context.Context, id uuid.UUID) (*workspac
 		return item, nil
 	}
 	return nil, workspaceRepo.ErrNotFound
+}
+
+func TestOrchestrationInvalidYAMLReturnsBadRequest(t *testing.T) {
+	w := httptest.NewRecorder()
+	orchestrationError(w, fmt.Errorf("%w: invalid service definition", workspaceconfig.ErrInvalid))
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `"code":"invalid_configuration"`) {
+		t.Fatalf("invalid YAML returned internal error: %d %s", w.Code, w.Body.String())
+	}
 }
 
 type orchestrationServices []*configModel.Service

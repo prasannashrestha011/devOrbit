@@ -89,13 +89,22 @@ func TestServiceAPI(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &snapshot); err != nil {
 		t.Fatal(err)
 	}
+	if w := request("POST", base+"/services", `{"name":"api","command":"go","ports":{"http":8080},"revision":"`+snapshot.Revision+`"}`); w.Code != 400 {
+		t.Fatalf("removed ports field accepted on create: %d %s", w.Code, w.Body.String())
+	}
 	w = request("POST", base+"/services", `{"name":"api","command":"go","args":["run","."],"revision":"`+snapshot.Revision+`"}`)
 	if w.Code != 201 {
 		t.Fatalf("create: %d %s", w.Code, w.Body.String())
 	}
+	if strings.Contains(w.Body.String(), `"ports"`) {
+		t.Fatalf("removed ports field returned: %s", w.Body.String())
+	}
 	var item model.Service
 	if err := json.Unmarshal(w.Body.Bytes(), &item); err != nil {
 		t.Fatal(err)
+	}
+	if w := request("PATCH", "/api/v1/services/"+item.ID.String(), `{"ports":{"http":8080},"revision":"`+snapshot.Revision+`"}`); w.Code != 400 {
+		t.Fatalf("removed ports field accepted on update: %d %s", w.Code, w.Body.String())
 	}
 	envPath := filepath.Join(root, ".env")
 	if err := os.WriteFile(envPath, []byte("VALUE=1\r\n"), 0600); err != nil {

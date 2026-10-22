@@ -2,7 +2,6 @@ package routes
 
 import (
 	"context"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -37,11 +36,7 @@ func RegisterRoutes(r chi.Router, db *gorm.DB, supervisor *process.Supervisor, t
 				continue
 			}
 			item, err := services.Get(ctx, id)
-			if err != nil || item == nil || item.Ports[session.Target.PortKey] == 0 {
-				_ = traffic.Stop(ctx, workspaceID, session.ID)
-				continue
-			}
-			if session.Upstream != "http://127.0.0.1:"+strconv.Itoa(item.Ports[session.Target.PortKey]) {
+			if err != nil || item == nil {
 				_ = traffic.Stop(ctx, workspaceID, session.ID)
 			}
 		}

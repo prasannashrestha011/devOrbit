@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -23,13 +22,11 @@ const RelativePath = ".devorbit/workspace.yaml"
 
 var ErrInvalid = errors.New("invalid workspace YAML")
 var ErrConflict = errors.New("workspace YAML changed; reload before saving")
-var keyPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,119}$`)
 var writeMu sync.Mutex
 
 type Service struct {
-	Command string         `yaml:"command" json:"command"`
-	CWD     string         `yaml:"cwd,omitempty" json:"cwd"`
-	Ports   map[string]int `yaml:"ports,omitempty" json:"ports"`
+	Command string `yaml:"command" json:"command"`
+	CWD     string `yaml:"cwd,omitempty" json:"cwd"`
 }
 
 type Config struct {
@@ -45,19 +42,7 @@ type Snapshot struct {
 func Path(root string) string { return filepath.Join(root, RelativePath) }
 
 func Parse(root string, data []byte) (Config, error) {
-	var node yaml.Node
-	decoder := yaml.NewDecoder(bytes.NewReader(data))
-	if err := decoder.Decode(&node); err != nil {
-		return Config{}, fmt.Errorf("%w: %v", ErrInvalid, err)
-	}
-	var extra yaml.Node
-	if err := decoder.Decode(&extra); err != io.EOF {
-		return Config{}, fmt.Errorf("%w: expected one YAML document", ErrInvalid)
-	}
-	if len(node.Content) != 1 || node.Content[0].Kind != yaml.MappingNode {
-		return Config{}, fmt.Errorf("%w: root must be a mapping", ErrInvalid)
-	}
-	if err := checkNode(node.Content[0]); err != nil {
+	if _, err := parseDocument(data); err != nil {
 		return Config{}, err
 	}
 	var config Config
@@ -79,13 +64,27 @@ func Parse(root string, data []byte) (Config, error) {
 		if _, err := ResolveDirectory(root, item.CWD); err != nil {
 			return Config{}, fmt.Errorf("%w: services.%s.cwd: %v", ErrInvalid, key, err)
 		}
-		for name, port := range item.Ports {
-			if !keyPattern.MatchString(name) || port < 1 || port > 65535 {
-				return Config{}, fmt.Errorf("%w: services.%s.ports: invalid name or port", ErrInvalid, key)
-			}
-		}
 	}
 	return config, nil
+}
+
+func parseDocument(data []byte) (*yaml.Node, error) {
+	var node yaml.Node
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	if err := decoder.Decode(&node); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	var extra yaml.Node
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return nil, fmt.Errorf("%w: expected one YAML document", ErrInvalid)
+	}
+	if len(node.Content) != 1 || node.Content[0].Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("%w: root must be a mapping", ErrInvalid)
+	}
+	if err := checkNode(node.Content[0]); err != nil {
+		return nil, err
+	}
+	return &node, nil
 }
 
 func validServiceKey(key string) bool {

@@ -17,7 +17,6 @@ type Service struct {
 	WorkingDirectory string            `json:"working_directory"`
 	GitBranch        string            `json:"git_branch"`
 	Env              map[string]string `json:"env"`
-	Ports            map[string]int    `json:"ports"`
 	Enabled          *bool             `json:"enabled"`
 	AutoRestart      bool              `json:"auto_restart"`
 	CreatedAt        time.Time         `json:"created_at"`

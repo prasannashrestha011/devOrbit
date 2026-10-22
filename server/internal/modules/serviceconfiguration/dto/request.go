@@ -9,21 +9,19 @@ import (
 )
 
 type CreateInput struct {
-	Name             string         `json:"name"`
-	Command          string         `json:"command"`
-	Args             []string       `json:"args"`
-	WorkingDirectory string         `json:"working_directory"`
-	Ports            map[string]int `json:"ports"`
-	Revision         string         `json:"revision"`
+	Name             string   `json:"name"`
+	Command          string   `json:"command"`
+	Args             []string `json:"args"`
+	WorkingDirectory string   `json:"working_directory"`
+	Revision         string   `json:"revision"`
 }
 
 type PatchInput struct {
-	Name             *string         `json:"name"`
-	Command          *string         `json:"command"`
-	Args             *[]string       `json:"args"`
-	WorkingDirectory *string         `json:"working_directory"`
-	Ports            *map[string]int `json:"ports"`
-	Revision         string          `json:"revision"`
+	Name             *string   `json:"name"`
+	Command          *string   `json:"command"`
+	Args             *[]string `json:"args"`
+	WorkingDirectory *string   `json:"working_directory"`
+	Revision         string    `json:"revision"`
 }
 
 func DecodeCreate(r *http.Request) (CreateInput, error) {

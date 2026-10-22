@@ -16,17 +16,18 @@ func TestValidationAndAtomicRevision(t *testing.T) {
 	for _, source := range []string{
 		"services:\n  api:\n    command: go\n    command: npm\n",
 		"services:\n  api:\n    command: go\n    unknown: true\n",
+		"services:\n  api:\n    command: go\n    ports:\n      http: 8080\n",
 		"services:\n  api:\n    command: go && rm -rf .\n",
 	} {
 		if _, err := Write(root, []byte(source), initial.Revision); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("invalid YAML accepted: %q: %v", source, err)
 		}
 	}
-	next, err := Write(root, []byte("services:\n  API server:\n    command: go run ./cmd/api\n    ports:\n      http: 8080\n"), initial.Revision)
+	next, err := Write(root, []byte("services:\n  API server:\n    command: go run ./cmd/api\n"), initial.Revision)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if next.Config.Services["API server"].Ports["http"] != 8080 {
+	if next.Config.Services["API server"].Command != "go run ./cmd/api" {
 		t.Fatal("valid service was not loaded")
 	}
 	if _, err := Write(root, []byte("services: {}\n"), initial.Revision); !errors.Is(err, ErrConflict) {

@@ -63,11 +63,11 @@ func TestYAMLCRUDAndStableIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := svc.Create(ctx, wid, CreateInput{Name: "api", Command: "go", Args: []string{"run", "./cmd/api"}, WorkingDirectory: "backend", Ports: map[string]int{"http": 8080}, Revision: first.Revision})
+	created, err := svc.Create(ctx, wid, CreateInput{Name: "api", Command: "go", Args: []string{"run", "./cmd/api"}, WorkingDirectory: "backend", Revision: first.Revision})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.Command != "go" || created.Ports["http"] != 8080 {
+	if created.Command != "go" || created.WorkingDirectory != "backend" {
 		t.Fatalf("created: %+v", created)
 	}
 	if _, err := svc.Create(ctx, wid, CreateInput{Name: "api", Command: "go", Revision: first.Revision}); !errors.Is(err, workspaceconfig.ErrConflict) {

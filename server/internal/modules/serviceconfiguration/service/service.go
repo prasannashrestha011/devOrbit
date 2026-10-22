@@ -121,7 +121,7 @@ func (s *Service) Create(ctx context.Context, workspaceID uuid.UUID, input Creat
 		return nil, workspaceconfig.ErrConflict
 	}
 	name := strings.TrimSpace(input.Name)
-	definition := workspaceconfig.Service{Command: commandLine(input.Command, input.Args), CWD: input.WorkingDirectory, Ports: input.Ports}
+	definition := workspaceconfig.Service{Command: commandLine(input.Command, input.Args), CWD: input.WorkingDirectory}
 	var identity *model.Identity
 	_, err = workspaceconfig.Update(workspace.RootPath, input.Revision, func(config workspaceconfig.Config) error {
 		if _, exists := config.Services[name]; exists {
@@ -204,7 +204,7 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, input PatchInput) (*
 	if input.Name != nil && *input.Name != identity.Key {
 		return nil, &ValidationError{Field: "name", Message: "rename the YAML key in the file to create a new service identity"}
 	}
-	if input.Command == nil && input.Args == nil && input.WorkingDirectory == nil && input.Ports == nil {
+	if input.Command == nil && input.Args == nil && input.WorkingDirectory == nil {
 		return nil, &ValidationError{Field: "body", Message: "at least one field is required"}
 	}
 	workspace, err := s.workspaces.Get(ctx, identity.WorkspaceID)
@@ -231,9 +231,6 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, input PatchInput) (*
 		}
 		if input.WorkingDirectory != nil {
 			definition.CWD = *input.WorkingDirectory
-		}
-		if input.Ports != nil {
-			definition.Ports = *input.Ports
 		}
 		config.Services[identity.Key] = definition
 		encoded, err := workspaceconfig.Encode(config)
@@ -277,7 +274,7 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID, revision string) err
 func project(ctx context.Context, identity *model.Identity, definition workspaceconfig.Service, root string) *model.Service {
 	words, _ := workspaceconfig.SplitCommand(definition.Command)
 	enabled := true
-	item := &model.Service{ID: identity.ID, WorkspaceID: identity.WorkspaceID, Name: identity.Key, Command: words[0], Args: words[1:], WorkingDirectory: definition.CWD, Env: map[string]string{}, Ports: definition.Ports, Enabled: &enabled}
+	item := &model.Service{ID: identity.ID, WorkspaceID: identity.WorkspaceID, Name: identity.Key, Command: words[0], Args: words[1:], WorkingDirectory: definition.CWD, Env: map[string]string{}, Enabled: &enabled}
 	if directory, err := workspaceconfig.ResolveDirectory(root, definition.CWD); err == nil {
 		if output, err := exec.CommandContext(ctx, "git", "-C", directory, "symbolic-ref", "--quiet", "--short", "HEAD").Output(); err == nil {
 			item.GitBranch = strings.TrimSpace(string(output))

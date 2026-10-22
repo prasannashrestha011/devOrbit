@@ -10,6 +10,7 @@ import (
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/service"
 	"github.com/prasannashrestha011/devOrbit/internal/orchestration"
 	"github.com/prasannashrestha011/devOrbit/internal/process"
+	"github.com/prasannashrestha011/devOrbit/internal/workspaceconfig"
 )
 
 type OrchestrationController struct{ orchestrator *orchestration.Orchestrator }
@@ -70,6 +71,8 @@ func orchestrationError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, orchestration.ErrInvalidID):
 		orchestrationErrorJSON(w, http.StatusBadRequest, "invalid_request", "invalid id")
+	case errors.Is(err, workspaceconfig.ErrInvalid):
+		orchestrationErrorJSON(w, http.StatusBadRequest, "invalid_configuration", err.Error())
 	case service.IsNotFound(err):
 		orchestrationErrorJSON(w, http.StatusNotFound, "not_found", "workspace not found")
 	case errors.Is(err, orchestration.ErrConflict), errors.Is(err, process.ErrClosed):

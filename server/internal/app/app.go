@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -68,7 +69,11 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	address := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
 	broker := events.New()
 	defer broker.Close()
-	traffic := traffic_inspector.New(broker)
+	traffic, err := traffic_inspector.New(filepath.Join(cfg.DataDir, "traffic"), broker)
+	if err != nil {
+		return fmt.Errorf("initialize traffic captures: %w", err)
+	}
+	defer traffic.Close(context.Background())
 	stopEvents := context.AfterFunc(ctx, broker.Close)
 	defer stopEvents()
 	manager, err := logs.New(cfg.LogDir, broker)
@@ -126,8 +131,8 @@ func ensureWorkspaceYAML(root string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("workspace root %s is not a directory", root)
 	}
-	if _, err := workspaceconfig.ReadRaw(root); err == nil {
-		return nil
+	if snapshot, err := workspaceconfig.ReadRaw(root); err == nil {
+		return workspaceconfig.RemoveServicePorts(root, snapshot)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
