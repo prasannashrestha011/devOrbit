@@ -1,0 +1,29 @@
+---
+import Site from '../layouts/Site.astro';
+import Icon from '../components/Icon.astro';
+---
+<Site title="Architecture" description="How DevOrbit's React and Tauri desktop, Go process supervisor, workspace YAML, PostgreSQL, and local logs work together.">
+  <main id="main" class="container architecture-page">
+    <header class="page-heading"><h1>A small set of pieces.<br />Clear responsibilities.</h1><p>The desktop is the control surface. The Go backend owns execution. YAML holds service configuration.</p></header>
+    <figure class="architecture-diagram" aria-label="DevOrbit architecture: the desktop connects to the Go backend through an authenticated local API. The backend manages processes and reads and writes workspace YAML, PostgreSQL metadata, and local log files.">
+      <div class="diagram-label">On your machine</div>
+      <div class="architecture-node desktop-node"><Icon name="monitor" /><strong>React + Tauri desktop</strong></div>
+      <div class="api-connector"><span>Authenticated local API</span></div>
+      <div class="execution-row">
+        <div class="architecture-node backend-node"><Icon name="settings" /><div><strong>Go backend</strong><span>API · Orchestration · Process supervisor</span></div></div>
+        <div class="architecture-node process-node"><Icon name="terminal" /><div><strong>Managed processes</strong><span>PTY terminals + live events</span></div></div>
+      </div>
+      <div class="storage-row">
+        <div class="architecture-node"><Icon name="file" /><div><strong>Workspace YAML</strong><span>Service commands</span></div></div>
+        <div class="architecture-node"><Icon name="database" /><div><strong>PostgreSQL</strong><span>Metadata + identities</span></div></div>
+        <div class="architecture-node"><Icon name="folder" /><div><strong>Local files</strong><span>Execution logs</span></div></div>
+      </div>
+    </figure>
+    <section class="responsibilities" aria-label="Component responsibilities">
+      <div><span class="responsibility-number">01</span><div><h2>Desktop</h2><p>React renders the interface. Rust forwards authenticated requests and connects terminal streams.</p></div></div>
+      <div><span class="responsibility-number">02</span><div><h2>Backend</h2><p>Go validates configuration, supervises services, and streams status, logs, and terminal output.</p></div></div>
+      <div><span class="responsibility-number">03</span><div><h2>Storage</h2><p>YAML is the source of service configuration. PostgreSQL stores metadata. Logs stay on disk.</p></div></div>
+    </section>
+    <aside class="architecture-note"><Icon name="terminal" /><div><h2>Two processes, one workflow</h2><p>The desktop currently requires the backend to run separately. The development script starts both.</p></div><a class="text-link" href="/docs/">Set up DevOrbit <Icon /></a></aside>
+  </main>
+</Site>

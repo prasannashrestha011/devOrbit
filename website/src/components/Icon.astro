@@ -1,0 +1,16 @@
+---
+interface Props {
+  name?: 'arrow' | 'monitor' | 'terminal' | 'file' | 'database' | 'folder' | 'settings';
+}
+const { name = 'arrow' } = Astro.props;
+const paths = {
+  arrow: 'M4 12h16m-6-6 6 6-6 6',
+  monitor: 'M3 3h18v13H3z M8 21h8 M12 16v5',
+  terminal: 'M3 3h18v18H3z M7 8l4 4-4 4 M13 16h4',
+  file: 'M5 2h9l5 5v15H5z M14 2v6h5 M8 12h8 M8 16h8',
+  database: 'M3 5c0-4 18-4 18 0s-18 4-18 0v14c0 4 18 4 18 0V5 M3 12c0 4 18 4 18 0',
+  folder: 'M2 6V4h7l3 3h10v14H2V6z M2 10h20',
+  settings: 'm10 2-.6 3-2 .9-2.7-1.1-2 3.4 2.1 2V13l-2.1 2 2 3.4L7.4 17l2 .9.6 3h4l.6-3 2-.9 2.7 1.4 2-3.4-2.1-2v-2.8l2.1-2-2-3.4-2.7 1.1-2-.9L14 2z M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0',
+};
+---
+<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>

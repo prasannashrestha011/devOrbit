@@ -1,0 +1,42 @@
+---
+import '../styles/global.css';
+interface Props { title: string; description: string; }
+const { title, description } = Astro.props;
+const path = Astro.url.pathname;
+const links = [
+  { href: '/', label: 'Overview' },
+  { href: '/architecture/', label: 'Architecture' },
+  { href: '/docs/', label: 'Documentation' },
+];
+const repo = 'https://github.com/prasannashrestha011/devOrbit';
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#087f6f" />
+    <meta property="og:title" content={`${title} | DevOrbit`} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <title>{title} | DevOrbit</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="container header-inner">
+        <a class="brand" href="/" aria-label="DevOrbit home"><span class="brand-icon" aria-hidden="true"><span></span></span><span>Dev<span class="brand-light">Orbit</span></span></a>
+        <nav class="primary-nav" aria-label="Main navigation">
+          {links.map(({ href, label }) => <a href={href} aria-current={(href === '/' ? path === href : path.startsWith(href)) ? 'page' : undefined}>{label}</a>)}
+          <a href={repo}>GitHub</a>
+        </nav>
+      </div>
+    </header>
+    <slot />
+    <footer class="site-footer container">
+      <a href="/">DevOrbit</a><span>Built for local development.</span><a href={repo}>GitHub</a>
+    </footer>
+  </body>
+</html>
