@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { ArrowRight, Circle, Copy, Pause, Play, Search, Square, Trash2 } from "lucide-react";
 import { ApiError, api, type TrafficRecord, type TrafficSession } from "./api";
+import TrafficExchange from "./TrafficExchange";
 
 type Port = { key: string; label: string };
 type Event = { type: string; workspace_id: string; data?: { session_id?: string } };
+
+const bytes = (value?: number) => value == null ? "Unknown" : `${value} B`;
 
 export default function TrafficInspector({ workspaceId, kind, serviceKey, file, ports }: { workspaceId: string; kind: "local" | "docker"; serviceKey: string; file?: string; ports: Port[] }) {
   const [sessions, setSessions] = useState<TrafficSession[]>([]);
@@ -109,8 +113,7 @@ export default function TrafficInspector({ workspaceId, kind, serviceKey, file, 
     setBusy(true); setError("");
     try {
       await api.stopTraffic(workspaceId, session.id);
-      const remaining = sessions.filter((item) => item.id !== session.id);
-      setSessions(remaining); setSessionId(remaining[0]?.id ?? "");
+      setSessions((current) => current.map((item) => item.id === session.id ? { ...item, state: "stopped" } : item));
     } catch (problem) { setError(String(problem)); }
     finally { setBusy(false); }
   };
@@ -124,18 +127,59 @@ export default function TrafficInspector({ workspaceId, kind, serviceKey, file, 
   };
 
   const visible = records.filter((item) => (!method || item.method === method) && (!status || String(item.status_code).startsWith(status)) && (!search || item.path.toLowerCase().includes(search.toLowerCase())));
-  const detail = records.find((item) => item.id === selected);
+  const detail = visible.find((item) => item.id === selected);
   return <section className="traffic-inspector" aria-label="HTTP traffic inspector">
-    <div className="traffic-heading"><div><span className="eyebrow">HTTP TRAFFIC</span><h2>Traffic inspector</h2><p>Only requests sent to the temporary gateway URL appear here.</p></div><span className="state state-running">{session?.state ?? "Off"}</span></div>
-    {session ? <>
-      {sessions.length > 1 && <label>Session <select value={sessionId} onChange={(event) => setSessionId(event.target.value)}>{sessions.map((item) => <option key={item.id} value={item.id}>{item.target.port_key}</option>)}</select></label>}
-      <div className="traffic-target"><div><small>ACTUAL BACKEND</small><code>{session.upstream}</code></div><div><small>TEMPORARY GATEWAY</small><code>{session.proxy_url}</code></div><button className="button" onClick={() => navigator.clipboard.writeText(session.proxy_url).catch((problem) => setError(String(problem)))}>Copy URL</button><button className="button danger" disabled={busy} onClick={() => void stop()}>Disable inspection</button></div>
-      <p className="hint">Configure your HTTP client to use the gateway URL. Requests sent directly to the backend bypass this inspector.</p>
-      <div className="traffic-tools"><label>Method <select value={method} onChange={(event) => setMethod(event.target.value)}><option value="">All</option>{["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"].map((value) => <option key={value}>{value}</option>)}</select></label><label>Status <select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All</option>{["2", "3", "4", "5"].map((value) => <option key={value} value={value}>{value}xx</option>)}</select></label><label>Search <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Path" /></label><button className="button" onClick={() => { pausedRef.current = !paused; setPaused(!paused); if (paused) syncRef.current(); }}>{paused ? "Resume" : "Pause"}</button><button className="button" onClick={() => void clear()}>Clear</button></div>
-      <p className="traffic-state" role="status">{paused ? "Display paused; gateway still forwarding" : stream === "connected" ? "Live" : `Event stream ${stream.toLowerCase()}; checking history`}</p>
-      <div className="traffic-list" role="list" aria-label="Captured requests">{visible.length ? visible.map((item) => <button role="listitem" className={`traffic-row ${item.id === selected ? "selected" : ""}`} key={item.id} onClick={() => setSelected(item.id)}><time>{new Date(item.started_at).toLocaleTimeString()}</time><strong>{item.method}</strong><code title={item.path}>{item.path}</code><span className={item.status_code >= 400 ? "traffic-error" : ""}>{item.status_code || "—"}</span><span>{item.duration_ms} ms</span>{item.outcome !== "completed" && <span className="traffic-error">{item.outcome}</span>}</button>) : <p className="traffic-empty">No matching requests yet. Send an HTTP request to the gateway URL.</p>}</div>
-      {detail && <div className="traffic-detail"><h3>Request details</h3><dl><dt>Time</dt><dd>{new Date(detail.started_at).toLocaleString()}</dd><dt>Method</dt><dd>{detail.method}</dd><dt>Path</dt><dd>{detail.path}</dd><dt>Status</dt><dd>{detail.status_code || "—"}</dd><dt>Duration</dt><dd>{detail.duration_ms} ms</dd><dt>Request size</dt><dd>{detail.request_bytes ?? "Unknown"}</dd><dt>Response size</dt><dd>{detail.response_bytes}</dd><dt>Outcome</dt><dd>{detail.outcome}</dd>{detail.error && <><dt>Error</dt><dd>{detail.error}</dd></>}</dl></div>}
-    </> : <div className="traffic-off"><label>HTTP port <select value={port} onChange={(event) => setPort(event.target.value)}>{ports.length ? ports.map((item) => <option key={item.key} value={item.key}>{item.label}</option>) : <option value="">No HTTP port available</option>}</select></label><button className="button primary" disabled={busy || !port} onClick={() => void start()}>Inspect HTTP traffic</button><p>Inspection creates a temporary loopback gateway. Your service keeps running when inspection stops.</p></div>}
+    <div className="traffic-heading">
+      <h2>Traffic inspector</h2>
+      <div className="traffic-heading-actions">
+        <span className={`traffic-session-state ${session?.state === "active" ? "traffic-success" : ""}`}><Circle size={9} fill="currentColor" aria-hidden="true" />{session?.state ?? "Off"}</span>
+        {session?.state === "active" && <button className="button subtle" disabled={busy} onClick={() => void stop()}><Square size={14} aria-hidden="true" />Disable inspection</button>}
+      </div>
+    </div>
+    {(!session || session.state === "stopped") && <div className="traffic-off"><label>HTTP port <select value={port} onChange={(event) => setPort(event.target.value)}>{ports.length ? ports.map((item) => <option key={item.key} value={item.key}>{item.label}</option>) : <option value="">No HTTP port available</option>}</select></label><button className="button primary" disabled={busy || !port} onClick={() => void start()}>Inspect HTTP traffic</button><p>Capture includes headers, credentials, cookies, and bodies. History stays on this device for 7 days, up to 500 exchanges per session and 512 MiB total.</p></div>}
+    {session && <>
+      {sessions.length > 1 && <label>Session <select value={sessionId} onChange={(event) => setSessionId(event.target.value)}>{sessions.map((item) => <option key={item.id} value={item.id}>{item.target.port_key} · {item.state} · {new Date(item.started_at).toLocaleString()}</option>)}</select></label>}
+      {session.state === "active" ? <div className="traffic-target">
+        <div className="traffic-endpoint"><span>Gateway</span><div className="traffic-address"><code>{session.proxy_url}</code><button className="button subtle" onClick={() => navigator.clipboard.writeText(session.proxy_url).catch((problem) => setError(String(problem)))}><Copy size={15} aria-hidden="true" />Copy URL</button></div></div>
+        <ArrowRight className="traffic-direction" size={20} aria-hidden="true" />
+        <div className="traffic-endpoint"><span>Backend</span><div className="traffic-address"><code>{session.upstream}</code></div></div>
+        <p>Send requests to the gateway to capture traffic.</p>
+      </div> : <p className="traffic-capture-note">Inspection stopped. Saved history remains available; the gateway URL is no longer listening.</p>}
+      <div className="traffic-history">
+        <div className="traffic-tools">
+          <label className="traffic-search"><Search size={17} aria-hidden="true" /><input aria-label="Search paths" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search paths" /></label>
+          <label>Method <select value={method} onChange={(event) => setMethod(event.target.value)}><option value="">All</option>{["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "CONNECT", "TRACE"].map((value) => <option key={value}>{value}</option>)}</select></label>
+          <label>Status <select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All</option>{["1", "2", "3", "4", "5"].map((value) => <option key={value} value={value}>{value}xx</option>)}</select></label>
+          <div className="traffic-tool-actions">
+            <button className="button subtle" onClick={() => { pausedRef.current = !paused; setPaused(!paused); if (paused) syncRef.current(); }}>{paused ? <Play size={14} aria-hidden="true" /> : <Pause size={14} aria-hidden="true" />}{paused ? "Resume" : "Pause"}</button>
+            <button className="button subtle" onClick={() => void clear()}><Trash2 size={15} aria-hidden="true" />Clear</button>
+          </div>
+        </div>
+        <div className="traffic-history-heading">
+          <h3>History</h3><span>{visible.length} of {records.length} requests</span>
+          <span className={`traffic-state ${paused ? "traffic-warning" : stream === "connected" ? "traffic-success" : ""}`} role="status"><Circle size={8} fill="currentColor" aria-hidden="true" />{session.state === "stopped" ? "Saved history" : paused ? "Display paused; gateway still forwarding" : stream === "connected" ? "Live" : `Event stream ${stream.toLowerCase()}; checking history`}</span>
+        </div>
+        <div className="traffic-list" tabIndex={0} role="region" aria-label="Captured request history">
+          <table className="traffic-table" aria-label="Captured requests">
+            <colgroup><col className="traffic-col-sequence" /><col className="traffic-col-time" /><col className="traffic-col-method" /><col /><col className="traffic-col-status" /><col className="traffic-col-metric" /><col className="traffic-col-metric" /><col className="traffic-col-metric" /></colgroup>
+            <thead><tr>{["#", "Time", "Method", "Path", "Status", "Duration", "Request", "Response"].map((label) => <th scope="col" key={label}>{label}</th>)}</tr></thead>
+            <tbody>{visible.map((item) => <tr className={`traffic-row ${item.id === selected ? "selected" : ""}`} key={item.id} onClick={() => setSelected((current) => current === item.id ? "" : item.id)}>
+              <td>{item.sequence}</td><td><time dateTime={item.started_at}>{new Date(item.started_at).toLocaleTimeString()}</time></td><td>{item.method}</td>
+              <td><button className="traffic-path" aria-label={`Inspect request #${item.sequence}: ${item.method} ${item.path}`} aria-pressed={item.id === selected} title={item.path}><code>{item.path}</code></button></td>
+              <td className={item.status_code >= 400 || item.outcome !== "completed" ? "traffic-error" : item.status_code >= 200 && item.status_code < 300 ? "traffic-success" : ""} title={item.outcome.replaceAll("_", " ")}>{item.status_code || "—"}</td>
+              <td>{item.duration_ms} ms{item.capture_incomplete && <span className="traffic-incomplete" title={item.capture_error || "Some content was not fully captured"}>Incomplete</span>}</td><td>{bytes(item.request_bytes)}</td><td>{bytes(item.response_bytes)}</td>
+            </tr>)}</tbody>
+          </table>
+          {!visible.length && <p className="traffic-empty">{records.length ? "No requests match these filters. Adjust your search, method, or status." : "No requests captured yet. Send an HTTP request to the gateway URL."}</p>}
+        </div>
+      </div>
+      <div className="traffic-detail" hidden={!detail}>
+        <div className="traffic-detail-heading"><h3>Selected exchange</h3>{detail && <span>#{detail.sequence}</span>}<span className="traffic-resize-hint">Drag corner to resize</span><button className="button subtle" onClick={() => setSelected("")}>Hide</button></div>
+        {detail?.capture_error && <p className="error-banner" role="alert">{detail.capture_error}</p>}
+        {detail && <TrafficExchange key={`${sessionId}:${detail.id}`} workspaceId={workspaceId} sessionId={sessionId} record={detail} />}
+        <details className="traffic-capture-info"><summary>Capture information</summary><p>Messages are reconstructed. Compressed bodies are decoded for viewing; header order and chunk framing are not retained.</p><p>Content is retained on this device until cleared or expired. Previews are limited to 256 KiB; downloads include all retained bytes. Clearing history also discards captures currently in flight when they finish.</p></details>
+      </div>
+    </>}
     {error && <p className="error-banner" role="alert">{error}</p>}
   </section>;
 }
