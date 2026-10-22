@@ -13,11 +13,12 @@ To start PostgreSQL with Docker Compose from `server/`:
 
 ```sh
 cp -n .env.example .env # set the same private password in both database entries
-docker compose up -d
+docker compose up -d --wait
 go run ./cmd/devorbit
 ```
 
 Compose stores database files in a named volume and binds PostgreSQL to localhost. Use a URL-encoded password in `DEVORBIT_DATABASE_URL` if it contains URL-special characters.
+It restarts unless explicitly stopped and allows 30 seconds for shutdown. `docker compose stop` retains the database; `docker compose down -v` deletes it. Changing the password in `.env` does not update an already initialized database role.
 Compose reads `DEVORBIT_DB_PASSWORD` from `server/.env`; the Go server reads `DEVORBIT_DATABASE_URL` from the same file. Exported environment variables take precedence. When running from the repository root, the server also finds `server/.env`.
 
 If using an existing local PostgreSQL instance, create a role and database for DevOrbit, then set `DEVORBIT_DATABASE_URL` to its connection string:
@@ -35,6 +36,8 @@ go run ./cmd/devorbit
 ```
 
 The backend binds to `127.0.0.1:7456` by default. `DEVORBIT_HOST` accepts loopback IP addresses only.
+
+The backend runs on the host to manage local project processes. See [Docker and CI/CD](../docs/ci-cd.md) for the Docker setup and release workflow, or [installing a release](../docs/install-release.md) to use a prebuilt backend.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -86,21 +89,23 @@ All service routes require the same bearer token as workspace routes. Service cr
 Create a service under an existing workspace:
 
 ```json
-{"name":"api","command":"go","args":["run","./cmd/api"],"working_directory":"backend","ports":{"http":8080},"revision":"<current YAML revision>"}
+{"name":"api","command":"go","args":["run","./cmd/api"],"working_directory":"backend","revision":"<current YAML revision>"}
 ```
 
-The YAML format is limited to `services`, with `command`, optional `cwd`, and optional named `ports` per service. For example:
+The YAML format is limited to `services`, with `command` and optional `cwd` per service. For example:
 
 ```yaml
 services:
   api:
     command: go run ./cmd/api
     cwd: backend
-    ports:
-      http: 8080
 ```
 
-`PATCH` accepts `command`, `args`, `working_directory`, and `ports` with a current `revision`. A YAML key determines the service identity: editing that key keeps its UUID and log association; renaming it creates a new identity. External file edits are read on the next request and desktop refresh. A running process keeps the configuration it started with until explicitly restarted; YAML changes never trigger a restart.
+`PATCH` accepts `command`, `args`, and `working_directory` with a current `revision`. The former `ports` field is unsupported in new YAML and API requests; startup deletes it from existing configuration files. A YAML key determines the service identity: editing that key keeps its UUID and log association; renaming it creates a new identity. External file edits are read on the next request and desktop refresh. A running process keeps the configuration it started with until explicitly restarted; YAML changes never trigger a restart.
+
+Local HTTP traffic inspection uses detected listening TCP ports from the running service process and its children. Select the HTTP port when several are detected; inspection verifies that the selected port responds to HTTP before opening a gateway.
+
+Send HTTP requests to the temporary gateway URL to record the original request path, query, headers, cookies, body, and the forwarded response status, headers, trailers, and body. Direct service requests bypass the gateway. Inspection stores captures under `DEVORBIT_DATA_DIR/traffic` with private file permissions. History survives disabling inspection and restarting DevOrbit; clear it in the inspector or let it expire after seven days. Each session retains its newest 500 exchanges, and all sessions share a 512 MiB storage quota. When the quota is reached, forwarding continues and the affected exchange shows that only part of its body was retained. The detail API returns 256 KiB previews; the body download endpoints stream all retained bytes. Captures can contain credentials and other secrets, so keep the data directory private. HTTPS interception and WebSocket frame capture are not supported.
 
 YAML commands are split into an executable and arguments and run directly, without shell expansion. Relative `cwd` paths must stay inside the workspace; absolute paths may point to another existing directory, but make the YAML machine-specific. No command runs during configuration. Anyone who can edit service configurations can execute commands as the DevOrbit OS user. DevOrbit is not a process sandbox.
 
@@ -124,7 +129,7 @@ Aggregate status is `transitioning` when any service is starting or stopping; ot
 
 ## Schema and generated queries
 
-Startup migrates workspace metadata and the `service_identities` table, which maps each YAML service key to a stable UUID. It removes the unused legacy `services` table and reports a startup error if that cleanup fails, then creates an empty `.devorbit/workspace.yaml` for an existing workspace if the file is missing. Legacy database service definitions are discarded; add any services you still need to YAML. Existing YAML files are left unchanged. An inaccessible workspace is reported in the backend log without blocking startup.
+Startup migrates workspace metadata and the `service_identities` table, which maps each YAML service key to a stable UUID. It removes the unused legacy `services` table and reports a startup error if that cleanup fails, then creates an empty `.devorbit/workspace.yaml` for an existing workspace if the file is missing. Legacy database service definitions are discarded; add any services you still need to YAML. Existing YAML files have obsolete service `ports` entries removed atomically; other service settings and comments are retained. Files without those entries are left unchanged. An inaccessible workspace is reported in the backend log without blocking startup.
 
 After changing the workspace model, run `go generate ./...` to regenerate `internal/dal/query`; do not edit generated files. The generator uses `ApplyBasic` on the workspace model and does not require a live database. The application injects its DB into repositories, which use `query.Use(db)` for generated workspace queries. Repository methods pass each request context to GORM Gen for cancellation and deadlines. A caller needing a transaction can construct a repository with that transaction.
 
