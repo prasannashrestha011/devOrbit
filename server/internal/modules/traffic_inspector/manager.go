@@ -3,9 +3,13 @@ package traffic_inspector
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -18,29 +22,53 @@ var ErrClosed = errors.New("traffic inspector is shutting down")
 var ErrNotFound = errors.New("inspection session not found")
 
 type session struct {
-	info      SessionInfo
-	listener  net.Listener
-	server    *http.Server
-	transport *http.Transport
-	records   []Record
-	sequence  uint64
-	mu        sync.Mutex
+	info       SessionInfo
+	listener   net.Listener
+	server     *http.Server
+	transport  *http.Transport
+	records    []Record
+	sequence   uint64
+	mu         sync.Mutex
+	generation uint64
 }
 
 type Manager struct {
-	mu       sync.RWMutex
-	sessions map[uuid.UUID]*session
-	byTarget map[Target]uuid.UUID
-	closed   bool
-	broker   *events.Broker
+	mu        sync.RWMutex
+	sessions  map[uuid.UUID]*session
+	byTarget  map[Target]uuid.UUID
+	closed    bool
+	broker    *events.Broker
+	store     *captureStore
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
-func New(broker *events.Broker) *Manager {
-	return &Manager{
+func New(root string, broker *events.Broker) (*Manager, error) {
+	m := &Manager{
 		sessions: map[uuid.UUID]*session{},
 		byTarget: map[Target]uuid.UUID{},
 		broker:   broker,
+		store:    &captureStore{root: root, limit: captureQuota},
+		done:     make(chan struct{}),
 	}
+	if err := m.load(); err != nil {
+		return nil, err
+	}
+	go func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-m.done:
+				return
+			case <-ticker.C:
+				if err := m.prune(); err != nil {
+					slog.Error("traffic retention cleanup failed", "error", err)
+				}
+			}
+		}
+	}()
+	return m, nil
 }
 
 func (m *Manager) Start(target Target, upstream *url.URL) (SessionInfo, error) {
@@ -61,6 +89,14 @@ func (m *Manager) Start(target Target, upstream *url.URL) (SessionInfo, error) {
 	if err := m.reserveSession(s); err != nil {
 		return SessionInfo{}, err
 	}
+	if err := os.MkdirAll(m.store.sessionPath(s.info.ID), 0700); err != nil {
+		m.remove(s)
+		return SessionInfo{}, err
+	}
+	if err := m.store.put(filepath.Join(m.store.sessionPath(s.info.ID), "session.json"), s.info); err != nil {
+		m.remove(s)
+		return SessionInfo{}, err
+	}
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -68,6 +104,7 @@ func (m *Manager) Start(target Target, upstream *url.URL) (SessionInfo, error) {
 		return SessionInfo{}, err
 	}
 	transport := &http.Transport{
+		DisableCompression:    true,
 		Proxy:                 nil,
 		MaxIdleConnsPerHost:   16,
 		ResponseHeaderTimeout: 30 * time.Second,
@@ -98,9 +135,11 @@ func (m *Manager) Start(target Target, upstream *url.URL) (SessionInfo, error) {
 	m.mu.Unlock()
 
 	go func() {
-		_ = server.Serve(listener)
+		err := server.Serve(listener)
 		transport.CloseIdleConnections()
-		m.remove(s)
+		if !errors.Is(err, http.ErrServerClosed) {
+			_ = m.archive(s)
+		}
 	}()
 	m.publish(info.Target, events.TrafficSession, map[string]any{"session_id": info.ID, "state": info.State})
 	return info, nil
@@ -123,10 +162,16 @@ func (m *Manager) List(workspaceID uuid.UUID) []SessionInfo {
 	defer m.mu.RUnlock()
 	items := []SessionInfo{}
 	for _, s := range m.sessions {
-		if s.info.Target.WorkspaceID == workspaceID && s.info.State == "active" {
+		if s.info.Target.WorkspaceID == workspaceID && s.info.State != "starting" {
 			items = append(items, s.info)
 		}
 	}
+	sort.Slice(items, func(i, j int) bool {
+		if (items[i].State == "active") != (items[j].State == "active") {
+			return items[i].State == "active"
+		}
+		return items[i].StartedAt.After(items[j].StartedAt)
+	})
 	return items
 }
 
@@ -137,7 +182,7 @@ func (m *Manager) Stop(ctx context.Context, workspaceID, id uuid.UUID) error {
 		m.mu.Unlock()
 		return ErrNotFound
 	}
-	if s.info.State == "stopping" {
+	if s.info.State == "stopping" || s.info.State == "stopped" {
 		m.mu.Unlock()
 		return nil
 	}
@@ -145,15 +190,14 @@ func (m *Manager) Stop(ctx context.Context, workspaceID, id uuid.UUID) error {
 	server, transport := s.server, s.transport
 	m.mu.Unlock()
 	if server == nil {
-		m.remove(s)
-		return nil
+		return m.archive(s)
 	}
 	err := server.Shutdown(ctx)
 	if err != nil {
 		_ = server.Close()
 	}
 	transport.CloseIdleConnections()
-	m.remove(s)
+	err = errors.Join(err, m.archive(s))
 	m.publish(s.info.Target, events.TrafficSession, map[string]any{"session_id": id, "state": "stopped"})
 	return err
 }
@@ -173,6 +217,7 @@ func (m *Manager) StopService(ctx context.Context, workspaceID uuid.UUID, servic
 }
 
 func (m *Manager) Close(ctx context.Context) {
+	m.closeOnce.Do(func() { close(m.done) })
 	m.mu.Lock()
 	m.closed = true
 	m.mu.Unlock()
@@ -198,7 +243,7 @@ func (m *Manager) reserveSession(s *session) error {
 		return ErrDuplicate
 	}
 	for _, existing := range m.sessions {
-		if existing.info.ProxyURL == s.info.Upstream {
+		if existing.info.State == "active" && existing.info.ProxyURL == s.info.Upstream {
 			return errors.New("upstream points to another inspection gateway")
 		}
 	}
@@ -214,4 +259,19 @@ func (m *Manager) remove(s *session) {
 		delete(m.byTarget, s.info.Target)
 	}
 	m.mu.Unlock()
+	_ = m.store.remove(m.store.sessionPath(s.info.ID))
+}
+
+func (m *Manager) archive(s *session) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sessions[s.info.ID] != s {
+		return nil
+	}
+	s.info.State = "stopped"
+	if m.byTarget[s.info.Target] == s.info.ID {
+		delete(m.byTarget, s.info.Target)
+	}
+	// Loaded sessions always start stopped; the live state need not be rewritten on disk.
+	return nil
 }

@@ -33,7 +33,7 @@ func TestGatewayForwardingAndRecording(t *testing.T) {
 	address, _ := url.Parse(upstream.URL)
 	broker := events.New()
 	defer broker.Close()
-	manager := New(broker)
+	manager := newTestManager(t, broker)
 	defer manager.Close(context.Background())
 	workspaceID := uuid.New()
 	target := Target{WorkspaceID: workspaceID, Kind: "local", ServiceKey: uuid.NewString(), PortKey: "http"}
@@ -58,17 +58,16 @@ func TestGatewayForwardingAndRecording(t *testing.T) {
 	if response.StatusCode != 201 || response.Header.Get("X-Upstream") != "yes" || string(body) != "accepted" {
 		t.Fatalf("response not forwarded: %d %q %q", response.StatusCode, response.Header.Get("X-Upstream"), body)
 	}
-	records, latest, err := manager.Recent(workspaceID, info.ID, 0, 10)
-	if err != nil || latest != 1 || len(records) != 1 {
-		t.Fatalf("history = %+v, %d, %v", records, latest, err)
+	records := waitRecords(t, manager, workspaceID, info.ID, 0, 1)
+	latest := records[0].Sequence
+	if latest != 1 {
+		t.Fatalf("history = %+v", records)
 	}
 	record := records[0]
-	if record.Path != "/users/:value" || record.Method != "POST" || record.StatusCode != 201 || record.RequestBytes == nil || *record.RequestBytes != 7 || record.ResponseBytes != 8 || record.Outcome != "completed" {
+	if record.Path != "/users/123?token=private" || record.Method != "POST" || record.StatusCode != 201 || record.RequestBytes == nil || *record.RequestBytes != 7 || record.ResponseBytes != 8 || record.Outcome != "completed" {
 		t.Fatalf("unsafe or incorrect record: %+v", record)
 	}
-	if strings.Contains(record.Path, "private") {
-		t.Fatal("query leaked into record")
-	}
+
 	gotEvent := false
 	for range 2 {
 		select {
@@ -92,8 +91,8 @@ func TestGatewayForwardingAndRecording(t *testing.T) {
 	if _, err := client.Get(info.ProxyURL); err == nil {
 		t.Fatal("stopped gateway still accepts requests")
 	}
-	if _, err := manager.Get(workspaceID, info.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("session retained after stop: %v", err)
+	if saved, err := manager.Get(workspaceID, info.ID); err != nil || saved.State != "stopped" {
+		t.Fatalf("history not retained after stop: %+v, %v", saved, err)
 	}
 }
 
@@ -101,7 +100,7 @@ func TestConcurrentStartAndBoundedHistory(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) }))
 	defer upstream.Close()
 	address, _ := url.Parse(upstream.URL)
-	manager := New(nil)
+	manager := newTestManager(t, nil)
 	defer manager.Close(context.Background())
 	target := Target{WorkspaceID: uuid.New(), Kind: "local", ServiceKey: uuid.NewString(), PortKey: "http"}
 	var wait sync.WaitGroup
@@ -133,7 +132,7 @@ func TestConcurrentStartAndBoundedHistory(t *testing.T) {
 	info := manager.List(target.WorkspaceID)[0]
 	s := manager.sessions[info.ID]
 	for index := 0; index < 520; index++ {
-		manager.append(s, Record{SessionID: info.ID})
+		appendTestRecord(t, manager, s, Record{SessionID: info.ID})
 	}
 	records, latest, err := manager.Recent(target.WorkspaceID, info.ID, 0, 500)
 	if err != nil || len(records) != 500 || records[0].Sequence != 21 || records[499].Sequence != 520 || latest != 520 {
@@ -147,24 +146,11 @@ func TestConcurrentStartAndBoundedHistory(t *testing.T) {
 		t.Fatalf("clear reset sequence: %d records, latest %d", len(records), latest)
 	}
 	manager.Close(context.Background())
-	if len(manager.List(target.WorkspaceID)) != 0 {
-		t.Fatal("shutdown retained session")
+	if manager.List(target.WorkspaceID)[0].State != "stopped" {
+		t.Fatal("shutdown did not stop session")
 	}
 	if _, err := manager.Start(target, address); !errors.Is(err, ErrClosed) {
 		t.Fatalf("start after shutdown: %v", err)
-	}
-}
-
-func TestSafePathRedactsSensitiveSegments(t *testing.T) {
-	for input, want := range map[string]string{
-		"/users/alice":      "/users/:value",
-		"/reset/abc":        "/reset/:value",
-		"/api/v1/items/123": "/api/:value/items/:value",
-		"/health":           "/health",
-	} {
-		if got := safePath(input); got != want {
-			t.Errorf("safePath(%q) = %q, want %q", input, got, want)
-		}
 	}
 }
 
@@ -176,7 +162,7 @@ func TestUpstreamFailureAndStreaming(t *testing.T) {
 		_, _ = io.WriteString(w, "second")
 	}))
 	address, _ := url.Parse(upstream.URL)
-	manager := New(nil)
+	manager := newTestManager(t, nil)
 	defer manager.Close(context.Background())
 	target := Target{WorkspaceID: uuid.New(), Kind: "local", ServiceKey: uuid.NewString(), PortKey: "http"}
 	info, err := manager.Start(target, address)
@@ -192,8 +178,8 @@ func TestUpstreamFailureAndStreaming(t *testing.T) {
 	if string(body) != "firstsecond" {
 		t.Fatalf("stream = %q", body)
 	}
-	records, _, _ := manager.Recent(target.WorkspaceID, info.ID, 0, 10)
-	if len(records) != 1 || records[0].DurationMS < 25 {
+	records := waitRecords(t, manager, target.WorkspaceID, info.ID, 0, 1)
+	if records[0].DurationMS < 25 {
 		t.Fatalf("stream duration missing: %+v", records)
 	}
 	upstream.Close()
@@ -202,7 +188,7 @@ func TestUpstreamFailureAndStreaming(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = response.Body.Close()
-	records, _, _ = manager.Recent(target.WorkspaceID, info.ID, 1, 10)
+	records = waitRecords(t, manager, target.WorkspaceID, info.ID, 1, 1)
 	if response.StatusCode != 502 || len(records) != 1 || records[0].Outcome != "upstream_error" {
 		t.Fatalf("upstream error missing: status %d, records %+v", response.StatusCode, records)
 	}

@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -36,21 +38,26 @@ func (s serviceStub) Get(_ context.Context, id uuid.UUID) (*serviceModel.Service
 	return s.item, nil
 }
 
-type processStub struct{}
+type processStub struct{ status process.Status }
 
-func (processStub) Status(uuid.UUID) process.Status { return process.Status{State: process.Running} }
+func (s processStub) Status(uuid.UUID) process.Status { return s.status }
 
 func TestStartRouteAcceptsDesktopPayloadAndScopesSessions(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("listening port detection is unsupported on this platform")
+	}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) }))
 	defer upstream.Close()
 	port, _ := strconv.Atoi(strings.TrimPrefix(upstream.URL, "http://127.0.0.1:"))
+	portKey := strconv.Itoa(port)
+	pid := os.Getpid()
 	workspaceID, serviceID := uuid.New(), uuid.New()
-	manager := New(nil)
+	manager := newTestManager(t, nil)
 	defer manager.Close(context.Background())
 	controller := &Controller{Manager: manager, Resolver: Resolver{
 		Workspaces: workspaceStub{workspaceID},
-		Services:   serviceStub{&serviceModel.Service{ID: serviceID, WorkspaceID: workspaceID, Ports: map[string]int{"http": port}}},
-		Processes:  processStub{},
+		Services:   serviceStub{&serviceModel.Service{ID: serviceID, WorkspaceID: workspaceID}},
+		Processes:  processStub{process.Status{State: process.Running, PID: &pid}},
 	}}
 	handler := api.Router(slog.New(slog.NewTextHandler(io.Discard, nil)), "test-token", "http://127.0.0.1:9900", func(context.Context) error { return nil }, controller.Register)
 	path := "/api/v1/workspaces/" + workspaceID.String() + "/traffic"
@@ -66,18 +73,18 @@ func TestStartRouteAcceptsDesktopPayloadAndScopesSessions(t *testing.T) {
 	if got := request("GET", path, "", false).Code; got != 401 {
 		t.Fatalf("unauthenticated status = %d", got)
 	}
-	if got := request("POST", path, `{"kind":"local","service_key":"`+serviceID.String()+`","port_key":"http","upstream":"http://evil"}`, true).Code; got != 400 {
+	if got := request("POST", path, `{"kind":"local","service_key":"`+serviceID.String()+`","port_key":"`+portKey+`","upstream":"http://evil"}`, true).Code; got != 400 {
 		t.Fatalf("arbitrary upstream accepted: %d", got)
 	}
-	created := request("POST", path, `{"kind":"local","service_key":"`+serviceID.String()+`","port_key":"http"}`, true)
+	created := request("POST", path, `{"kind":"local","service_key":"`+serviceID.String()+`","port_key":"`+portKey+`"}`, true)
 	if created.Code != 201 {
 		t.Fatalf("start status = %d: %s", created.Code, created.Body.String())
 	}
 	var info SessionInfo
-	if err := json.Unmarshal(created.Body.Bytes(), &info); err != nil || info.Target.ServiceKey != serviceID.String() || info.Target.PortKey != "http" {
+	if err := json.Unmarshal(created.Body.Bytes(), &info); err != nil || info.Target.ServiceKey != serviceID.String() || info.Target.PortKey != portKey {
 		t.Fatalf("decoded session = %+v, %v", info, err)
 	}
-	if got := request("POST", path, `{"kind":"local","service_key":"`+serviceID.String()+`","port_key":"http"}`, true).Code; got != 409 {
+	if got := request("POST", path, `{"kind":"local","service_key":"`+serviceID.String()+`","port_key":"`+portKey+`"}`, true).Code; got != 409 {
 		t.Fatalf("duplicate status = %d", got)
 	}
 	historyPath := path + "/" + info.ID.String() + "/records"
@@ -97,7 +104,7 @@ func TestStartRouteAcceptsDesktopPayloadAndScopesSessions(t *testing.T) {
 		}
 	}
 	checkHistory(0, 0)
-	manager.append(manager.sessions[info.ID], Record{ID: uuid.New(), SessionID: info.ID})
+	appendTestRecord(t, manager, manager.sessions[info.ID], Record{ID: uuid.New(), SessionID: info.ID})
 	checkHistory(1, 1)
 	if got := request("DELETE", historyPath, "", true).Code; got != 204 {
 		t.Fatalf("clear history status = %d", got)

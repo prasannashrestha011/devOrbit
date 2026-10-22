@@ -9,4 +9,6 @@ func (c *Controller) Register(r chi.Router) {
 	r.Delete("/workspaces/{id}/traffic/{sessionID}", c.Stop)
 	r.Get("/workspaces/{id}/traffic/{sessionID}/records", c.Recent)
 	r.Delete("/workspaces/{id}/traffic/{sessionID}/records", c.Clear)
+	r.Get("/workspaces/{id}/traffic/{sessionID}/records/{recordID}", c.Detail)
+	r.Get("/workspaces/{id}/traffic/{sessionID}/records/{recordID}/body/{side}", c.Body)
 }
