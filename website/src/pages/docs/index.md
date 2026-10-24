@@ -1,12 +1,12 @@
 ---
 layout: ../../layouts/Docs.astro
 label: Getting started
-title: From checkout to running services.
-description: Set up the local backend, launch the desktop, and bring your first project into DevOrbit.
+title: From installation to running services.
+description: Install DevOrbit or build it from source, then bring your first project into the app.
 source: README.md
 ---
 
-<aside class="callout">The desktop and backend run separately. The development script starts both for you.</aside>
+<aside class="callout">The desktop starts its bundled backend automatically. Install a release and open DevOrbit, or build from source below.</aside>
 
 ## Before you start
 
@@ -15,44 +15,32 @@ Clone the [DevOrbit repository](https://github.com/prasannashrestha011/devOrbit)
 | Tool | Used for |
 | --- | --- |
 | Go 1.24+ | Building the backend |
-| PostgreSQL 17 | Workspace metadata and service identities |
+| C compiler (GCC / Clang / MinGW-w64) | Building the embedded SQLite driver with CGO |
 | Node.js + npm | Building the desktop interface |
 | Rust + Cargo | Building the Tauri desktop host |
 | tmux (Linux / macOS) | Interactive service terminals |
 | [Tauri system dependencies](https://v2.tauri.app/start/prerequisites/) | Native desktop libraries for your OS |
 
-Docker with Compose v2 is needed for the database commands below. If you prefer prebuilt programs, follow the [release installation guide](/docs/installation/).
+Docker with Compose v2 is only needed to manage Docker Compose projects. If you prefer prebuilt programs, follow the [release installation guide](/docs/installation/).
 
-## 1. Prepare the backend
+## 1. Prepare a source build
 
-Copy the example environment file:
+SQLite is embedded in the backend. It creates `devorbit.db` in the private DevOrbit data directory on first startup. No database server or credentials are required.
 
-```sh
-cd server
-cp -n .env.example .env
-```
-
-Edit `.env` before starting the database. Replace `change-me` with the same private password in `DEVORBIT_DB_PASSWORD` and `DEVORBIT_DATABASE_URL`. URL-encode special characters in the connection-string password.
-
-```sh
-docker compose up -d --wait
-```
-
-Already running PostgreSQL 17? Create a database and set `DEVORBIT_DATABASE_URL` in `.env` instead. See the [backend setup instructions](https://github.com/prasannashrestha011/devOrbit/blob/main/server/README.md#requirements-and-setup).
+Export optional settings before launching the desktop. See the [backend setup instructions](https://github.com/prasannashrestha011/devOrbit/blob/main/server/README.md#requirements-and-setup) for compiler requirements and configuration.
 
 ## 2. Launch DevOrbit
 
-From the `server/` directory, return to the repository root, install the desktop dependencies, and launch:
+From the repository root, install the desktop dependencies and launch:
 
 ```sh
-cd ..
 cd desktop && npm ci && cd ..
 ./dev.sh
 ```
 
-The Bash script builds the backend, waits for its health check, and opens the desktop. Closing the desktop or pressing Ctrl+C stops the backend. PostgreSQL keeps running; `docker compose -f server/compose.yaml stop` stops it while keeping your data.
+The Bash script launches Tauri, which builds and starts the backend. Closing the desktop stops the backend. The SQLite database stays on disk for the next launch.
 
-On Windows, use separate terminals: run `go run ./cmd/devorbit` from `server/`, then `npm ci` and `npm run tauri -- dev` from `desktop/`. Leave the backend terminal open while using the desktop.
+On Windows, run `npm ci` and `npm run tauri -- dev` from `desktop/`; Tauri builds and starts the backend there too.
 
 ## 3. Add your first services
 
@@ -62,6 +50,6 @@ Start a service, open its terminal, and follow its logs. A running status means 
 
 ## If the desktop cannot connect
 
-Check that PostgreSQL and the backend are running. The default health endpoint is `http://127.0.0.1:7456/health`; it returns `503` if the database is unavailable.
+Reopen DevOrbit to restart its backend. Startup errors are shown in a dialog. The default health endpoint is `http://127.0.0.1:7456/health`.
 
-If you change the host, port, data directory, or token path, export the same settings for both processes. The desktop does not read `server/.env`. See [connection settings](/docs/configuration/#backend-settings).
+If you change the host, port, data directory, or token path, export the settings before launching DevOrbit. The desktop passes them to its backend. See [connection settings](/docs/configuration/#backend-settings).

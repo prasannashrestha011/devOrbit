@@ -1,64 +1,36 @@
 ---
 layout: ../../layouts/Docs.astro
 label: Installation
-title: Run a prebuilt release.
-description: Install the desktop and its matching backend, then connect them to a local PostgreSQL database.
+title: Install and open DevOrbit.
+description: One desktop installer includes the backend and its local SQLite database.
 source: docs/install-release.md
 ---
 
-<aside class="callout">Download both the desktop installer and the matching backend archive. The desktop does not bundle or start the backend yet.</aside>
+<aside class="callout">Download one desktop installer for your platform. Opening DevOrbit starts its bundled backend automatically.</aside>
 
 ## Choose your platform
 
 Check the [GitHub releases](https://github.com/prasannashrestha011/devOrbit/releases) for available assets. Tagged builds create draft releases; a draft must be published before it is publicly downloadable. If no release is available, [build from source](/docs/).
 
-| Platform | Desktop installer | Backend archive suffix |
-| --- | --- | --- |
-| Linux x64 (Ubuntu/Debian) | `.deb` | `linux-x64.tar.gz` |
-| Windows x64 | `-setup.exe` | `windows-x64.tar.gz` |
-| macOS Apple Silicon | `_aarch64.dmg` | `macos-arm64.tar.gz` |
-| macOS Intel | `_x64.dmg` | `macos-x64.tar.gz` |
+| Platform | Installer |
+| --- | --- |
+| Linux x64 (Ubuntu/Debian) | `.deb` |
+| Windows x64 | `-setup.exe` |
+| macOS Apple Silicon | `_aarch64.dmg` |
+| macOS Intel | `_x64.dmg` |
 
 Development releases are unsigned: macOS builds use ad-hoc signing without notarization, and Windows builds have no publisher certificate. Your OS may warn or block installation.
 
-## Install and configure
+## Install and launch
 
-Install Docker with Compose v2 or use an existing PostgreSQL 17 database. Linux and macOS need `tmux` for service terminals. Your managed projects still need their own runtimes; Go, Node.js, and Rust are not needed just to run the downloaded DevOrbit programs.
+Linux and macOS need `tmux` for local service terminals. Your managed projects still need their own runtimes; Go, Node.js, Rust, a C compiler, and SQLite are not needed just to run DevOrbit. Docker with Compose v2 is needed only for Docker Compose projects.
 
-Install the desktop package for your OS. On Ubuntu, use `sudo apt install ./<downloaded-file>.deb` so native dependencies are installed. On macOS, copy DevOrbit from the disk image into Applications; on Windows, run the installer.
+On Ubuntu, use `sudo apt install ./<downloaded-file>.deb` so native dependencies are installed. On macOS, copy DevOrbit from the disk image into Applications; on Windows, run the installer. Open DevOrbit normally. It creates `devorbit.db` and a private API token in your DevOrbit config directory, then starts its bundled backend.
 
-Extract the backend archive into a permanent directory. Copy `server/.env.example` to `server/.env`, then replace both `change-me` password entries with the same private password. URL-encode special characters in the database URL password.
-
-## Start both programs
-
-From the extracted backend directory:
-
-```sh
-docker compose -f server/compose.yaml up -d --wait
-```
-
-Start the backend and leave its terminal open:
-
-```sh
-# Linux / macOS
-./devorbit
-```
-
-```powershell
-# Windows PowerShell
-.\devorbit.exe
-```
-
-Open the desktop as the same OS user. Both programs default to `127.0.0.1:7456` and the user's DevOrbit config directory. For custom paths or ports, use the same [exported settings](/docs/configuration/#backend-settings) for both programs.
+DevOrbit shows an error if the backend cannot start or its local port is already in use. For custom paths or ports, export [backend settings](/docs/configuration/#backend-settings) before opening the app. Installed builds do not read `server/.env`.
 
 ## Verify and upgrade
 
-Release assets include `SHA256SUMS`. Compare each downloaded asset's SHA-256 digest with its entry. Linux can use `sha256sum -c SHA256SUMS`; macOS can use `shasum -a 256 -c SHA256SUMS`. On Windows, use `Get-FileHash <downloaded-file> -Algorithm SHA256`. Missing files are reported if you downloaded only one platform.
+Release assets include `SHA256SUMS`. Compare your installer's SHA-256 digest with its entry. Linux can use `sha256sum -c SHA256SUMS`; macOS can use `shasum -a 256 -c SHA256SUMS`. On Windows, use `Get-FileHash <downloaded-file> -Algorithm SHA256`. Missing files are reported if you downloaded only one platform.
 
-Back up PostgreSQL and the private DevOrbit data directory before upgrading: the backend applies migrations on startup. Keep the existing `.env` and database volume. To stop the database without deleting it:
-
-```sh
-docker compose -f server/compose.yaml stop
-```
-
-`down -v` deletes the database volume. Changing `.env` does not change the password of an already initialized PostgreSQL role.
+Close DevOrbit and back up the private data directory before upgrading, including `devorbit.db`, workspace YAML, logs, and captured traffic. The backend applies schema migrations on startup. Keep the data directory on a local disk with private permissions. This release starts with a fresh SQLite database; earlier PostgreSQL workspaces are not imported.

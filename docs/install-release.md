@@ -1,59 +1,28 @@
 # Install a DevOrbit release
 
-Download the desktop installer and the matching `devorbit-backend-<version>-<platform>.tar.gz`. Both are required: the desktop does not start or bundle the backend yet.
+Download the desktop installer for your platform. It includes the Go backend and SQLite; opening DevOrbit starts the backend and creates the local database automatically.
 
-| Platform | Desktop installer | Backend archive suffix |
-| --- | --- | --- |
-| Linux x64 (Ubuntu/Debian) | `.deb` | `linux-x64.tar.gz` |
-| Windows x64 | `-setup.exe` | `windows-x64.tar.gz` |
-| macOS Apple Silicon | `_aarch64.dmg` | `macos-arm64.tar.gz` |
-| macOS Intel | `_x64.dmg` | `macos-x64.tar.gz` |
+| Platform | Installer |
+| --- | --- |
+| Linux x64 (Ubuntu/Debian) | `.deb` |
+| Windows x64 | `-setup.exe` |
+| macOS Apple Silicon | `_aarch64.dmg` |
+| macOS Intel | `_x64.dmg` |
 
-These are unsigned development releases. macOS builds use ad-hoc signing, without Apple notarization; Windows builds have no publisher certificate. Your OS may block or warn about them. Review the draft and test installation before publishing it to users.
+These are unsigned development releases. macOS builds use ad-hoc signing without Apple notarization; Windows builds have no publisher certificate. Your OS may block or warn about them. Review the draft and test installation before publishing it to users.
 
-## Prerequisites
+## Install and run
 
-Install Docker with Compose v2 for PostgreSQL, or use an existing PostgreSQL 17 database. Install `tmux` on Linux/macOS for service terminals. The projects you manage still need their own runtimes and tools on your machine. Go, Node.js, and Rust are not needed just to run the downloaded DevOrbit programs.
+On Ubuntu, install the `.deb` with `sudo apt install ./<downloaded-file>.deb` so its desktop dependencies are installed. On Windows, run the installer. On macOS, copy DevOrbit from the disk image into Applications. Then open DevOrbit normally.
 
-On Ubuntu, install the `.deb` with `sudo apt install ./<downloaded-file>.deb` so its desktop dependencies are installed. On Windows, use the installer; on macOS, copy DevOrbit from the disk image into Applications.
+Install `tmux` on Linux/macOS to use local service terminals. Docker with Compose v2 is required only for managing Docker Compose projects. Managed projects still need their own runtimes and tools. Go, Node.js, Rust, a C compiler, and a SQLite CLI are not needed to run the installed app.
 
-## Start the database and backend
+DevOrbit starts its bundled backend on `127.0.0.1:7456`, waits for it to become ready, and stops it when the desktop closes. If that port is already in use or startup fails, DevOrbit shows an error. Optional `DEVORBIT_*` settings must be exported before opening the app; the desktop passes its data directory and token path to the backend. Installed builds do not read `server/.env`.
 
-Extract the backend archive into a permanent directory. It contains the backend executable, this README, and a `server/` directory with Compose and an example environment file.
+The backend creates `devorbit.db` and the private API token in the user's DevOrbit config directory. Before upgrading, close DevOrbit and back up the entire private data directory, including `devorbit.db`, workspace YAML, logs, and captured traffic. The backend applies schema migrations on startup. Keep the data directory on a local disk with private permissions.
 
-1. Copy `server/.env.example` to `server/.env` if you do not already have one. Replace `change-me` in both password entries with the same private password. URL-encode the password in `DEVORBIT_DATABASE_URL` if it contains URL-special characters.
-2. From the extracted directory, start PostgreSQL:
-
-   ```sh
-   docker compose -f server/compose.yaml up -d --wait
-   ```
-
-3. Start the backend from that same directory and leave the terminal open:
-
-   ```sh
-   # Linux/macOS
-   ./devorbit
-   ```
-
-   ```powershell
-   # Windows PowerShell
-   .\devorbit.exe
-   ```
-
-4. Open the installed desktop app as the same OS user. The backend creates the private token the desktop reads. Both default to `127.0.0.1:7456` and the user's DevOrbit config directory.
-
-If using an existing database, skip the Compose command and set `DEVORBIT_DATABASE_URL` in `server/.env` instead. If you change host, port, data directory, or token path, launch both programs with the same exported settings; the desktop does not read `server/.env`.
-
-PostgreSQL remains available after you close DevOrbit. Ctrl+C in the backend terminal stops its managed processes. To stop PostgreSQL while retaining data:
-
-```sh
-docker compose -f server/compose.yaml stop
-```
-
-Keep the existing environment file and database volume when upgrading. The Compose project directory remains `server/`, so the same named database volume is reused. Do not use `down -v` unless you intend to delete the database. Changing the password in `.env` does not change an already initialized PostgreSQL role's password.
-
-The backend applies database migrations at startup. Back up the database and the private DevOrbit data directory before upgrading. The data directory contains workspace YAML, logs, and captured traffic and can contain secrets.
+This release starts with a fresh SQLite database. Earlier PostgreSQL workspaces are not imported.
 
 ## Verify downloads
 
-Tagged releases include `SHA256SUMS`. After downloading all release assets into one directory, run `sha256sum -c SHA256SUMS` on Linux or `shasum -a 256 -c SHA256SUMS` on macOS. On Windows, compare `Get-FileHash <downloaded-file> -Algorithm SHA256` with the corresponding entry. Missing assets will be reported if you downloaded only one platform.
+Tagged releases include `SHA256SUMS`. After downloading the installer and checksum file, compare its digest with the listed value using `sha256sum -c SHA256SUMS` on Linux, `shasum -a 256 -c SHA256SUMS` on macOS, or `Get-FileHash <downloaded-file> -Algorithm SHA256` on Windows. The Linux/macOS commands report missing files when other platforms' installers are not downloaded; compare the line for your installer.

@@ -1,59 +1,44 @@
 # DevOrbit backend
 
-DevOrbit has a local Go API and an in-memory process supervisor. Each workspace stores its service configuration in `.devorbit/workspace.yaml`; PostgreSQL stores workspace metadata and stable service identities. The Go module lives in `server/`.
+DevOrbit has a local Go API and an in-memory process supervisor. Each workspace stores its service configuration in `.devorbit/workspace.yaml`; SQLite stores workspace metadata and stable service identities. The Go module lives in `server/`.
 
 See the [backend architecture diagram](../docs/architecture.md) for the module and data flows.
 
 ## Requirements and setup
 
 - Go 1.24
-- A running PostgreSQL 17 server
+- A C compiler for the SQLite driver: GCC on Linux, Xcode command-line tools on macOS, or MinGW-w64 GCC on Windows. Build with `CGO_ENABLED=1` (the native-build default when a compiler is available).
 
-To start PostgreSQL with Docker Compose from `server/`:
+From `server/`:
 
 ```sh
-cp -n .env.example .env # set the same private password in both database entries
-docker compose up -d --wait
 go run ./cmd/devorbit
 ```
 
-Compose stores database files in a named volume and binds PostgreSQL to localhost. Use a URL-encoded password in `DEVORBIT_DATABASE_URL` if it contains URL-special characters.
-It restarts unless explicitly stopped and allows 30 seconds for shutdown. `docker compose stop` retains the database; `docker compose down -v` deletes it. Changing the password in `.env` does not update an already initialized database role.
-Compose reads `DEVORBIT_DB_PASSWORD` from `server/.env`; the Go server reads `DEVORBIT_DATABASE_URL` from the same file. Exported environment variables take precedence. When running from the repository root, the server also finds `server/.env`.
+The backend creates `devorbit.db` inside `DEVORBIT_DATA_DIR` on first startup. SQLite is embedded in the executable; no database server, password, or SQLite CLI is required. Optional settings are listed in `.env.example`. The backend reads `server/.env` from the repository root, or `.env` from `server/`; exported environment variables take precedence.
 
-If using an existing local PostgreSQL instance, create a role and database for DevOrbit, then set `DEVORBIT_DATABASE_URL` to its connection string:
-
-```sql
-CREATE ROLE devorbit LOGIN PASSWORD 'choose-a-private-password';
-CREATE DATABASE devorbit OWNER devorbit;
-```
-
-Run these as a PostgreSQL administrator. The `.env.example` file lists all settings. The application reads a `.env` file if present, and exported environment variables take precedence.
-
-```sh
-export DEVORBIT_DATABASE_URL='postgres://devorbit:your-password@127.0.0.1:5432/devorbit?sslmode=disable'
-go run ./cmd/devorbit
-```
+SQLite starts with an empty workspace list; PostgreSQL workspaces are not imported.
 
 The backend binds to `127.0.0.1:7456` by default. `DEVORBIT_HOST` accepts loopback IP addresses only.
 
-The backend runs on the host to manage local project processes. See [Docker and CI/CD](../docs/ci-cd.md) for the Docker setup and release workflow, or [installing a release](../docs/install-release.md) to use a prebuilt backend.
+The backend runs on the host to manage local project processes. The desktop installer bundles it and starts it automatically; see [installing a release](../docs/install-release.md).
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `DEVORBIT_HOST` | `127.0.0.1` | Local listen address |
 | `DEVORBIT_PORT` | `7456` | HTTP port |
-| `DEVORBIT_DATABASE_URL` | Required | PostgreSQL connection string |
-| `DEVORBIT_DATA_DIR` | User config directory + `devorbit` | Local application data |
+| `DEVORBIT_DATA_DIR` | User config directory + `devorbit` | SQLite database and local application data |
 | `DEVORBIT_LOG_DIR` | `<data dir>/logs` | Managed process log files |
 | `DEVORBIT_SHUTDOWN_TIMEOUT` | `10s` | HTTP and process shutdown deadlines |
 | `DEVORBIT_AUTH_TOKEN_PATH` | `<data dir>/auth-token` | Local bearer token file |
 
 Path settings must be absolute. The process creates missing data and log directories with private permissions. On Unix, the token file is created with mode `0600`; an existing token or its parent directory with broader permissions is rejected. On Windows, the token file receives a current-user/System ACL, and startup rejects a token directory or existing file that does not pass the private ACL check. Keep custom paths within the current user's private profile.
 
+Back up the private data directory with the backend stopped, including `devorbit.db`, workspace YAML, logs, and traffic captures. Keep the database on a local disk.
+
 ## API
 
-- `GET /health` is unauthenticated and checks PostgreSQL connectivity. It returns `503` when the database is unavailable.
+- `GET /health` is unauthenticated and checks database connectivity. It returns `503` when the database is unavailable.
 - `GET /api/v1/system/info` requires `Authorization: Bearer <token>`.
 - `POST /api/v1/workspaces` creates a workspace from `name` and optional `description`, with `.devorbit/workspace.yaml` under `DEVORBIT_DATA_DIR/workspaces/<workspace UUID>`.
 - `GET /api/v1/workspaces` lists workspaces in creation order, with optional `limit` (1–100, default 50) and `offset` (nonnegative, default 0).
@@ -146,6 +131,6 @@ go vet ./...
 go build -buildvcs=false ./cmd/devorbit
 ```
 
-Set `DEVORBIT_TEST_DATABASE_URL` to a separate PostgreSQL 17 database to run migration and repository integration tests. They create and drop only unique temporary schemas. Without that variable, these tests are skipped.
+Migration and repository integration tests always run against isolated SQLite files in temporary directories. They cover persistence after reopening, connection settings, UUIDs, uniqueness, foreign keys, cascading deletion, concurrent identity resolution, and transaction rollback. Release jobs run the database tests on each target OS before packaging.
 
 Current limitations: there is no automatic restart. SSE events are in memory and have no replay after a disconnect or backend restart. Workspace orchestration does not resolve service dependencies or persist runtime state. Editing a running service changes only future starts; removing it through DevOrbit is rejected until it stops. Backend structured logs still go to standard error; managed-process logs are stored separately in `DEVORBIT_LOG_DIR`.

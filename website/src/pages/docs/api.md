@@ -8,7 +8,7 @@ source: server/README.md
 
 ## Connect and authenticate
 
-The default base URL is `http://127.0.0.1:7456`. `GET /health` is unauthenticated and checks PostgreSQL connectivity; it returns `503` when the database is unavailable.
+The default base URL is `http://127.0.0.1:7456`. `GET /health` is unauthenticated and checks SQLite connectivity; it returns `503` when the database is unavailable.
 
 Every `/api/v1` route requires `Authorization: Bearer <token>`. The token lives at `DEVORBIT_AUTH_TOKEN_PATH` (by default, `auth-token` in the DevOrbit data directory). Keep it private and out of URLs, browser code, and source control. The Tauri host handles authentication for the desktop.
 

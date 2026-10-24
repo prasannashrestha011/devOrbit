@@ -36,22 +36,23 @@ Services inherit the backend's environment. Export required variables before sta
 
 The API validates YAML before saving it atomically. Each start loads a fresh, validated configuration snapshot. Editing a running service affects its next start; changes never trigger an automatic restart.
 
-Keeping a service's YAML key preserves its UUID and log association. Renaming the key creates a new service identity. PostgreSQL stores these identities and workspace metadata; YAML is the only source of service configuration.
+Keeping a service's YAML key preserves its UUID and log association. Renaming the key creates a new service identity. SQLite stores these identities and workspace metadata; YAML is the only source of service configuration.
 
 API writes require the current configuration `revision`. If another edit wins first, the API returns `409`; fetch the latest content, reconcile the edit, and retry. External file edits appear on the next request and desktop refresh.
 
 ## Backend settings
 
-The backend reads `server/.env`; exported environment variables take precedence. The desktop does not read that file. Export matching `DEVORBIT_HOST`, `DEVORBIT_PORT`, `DEVORBIT_DATA_DIR`, and `DEVORBIT_AUTH_TOKEN_PATH` settings for both processes if you change them.
+When running the backend alone for development, it reads `server/.env`; exported environment variables take precedence. The desktop starts its bundled backend with exported settings and does not read `server/.env`. Export `DEVORBIT_HOST`, `DEVORBIT_PORT`, `DEVORBIT_DATA_DIR`, or `DEVORBIT_AUTH_TOKEN_PATH` before launching the desktop if you need custom values.
 
 | Variable | Default |
 | --- | --- |
 | `DEVORBIT_HOST` | `127.0.0.1` (loopback IPs only) |
 | `DEVORBIT_PORT` | `7456` |
-| `DEVORBIT_DATABASE_URL` | Required PostgreSQL connection string |
 | `DEVORBIT_DATA_DIR` | User config directory + `devorbit` |
 | `DEVORBIT_LOG_DIR` | Data directory + `/logs` |
 | `DEVORBIT_AUTH_TOKEN_PATH` | Data directory + `/auth-token` |
 | `DEVORBIT_SHUTDOWN_TIMEOUT` | `10s` |
 
 Custom paths must be absolute. Keep the data directory and authentication token private. The backend rejects token files or token directories with permissions broader than its private-access requirements. Logs and captured HTTP traffic can contain secrets from your applications.
+
+The backend creates `devorbit.db` in the data directory automatically. Stop the backend before backing up that directory.
