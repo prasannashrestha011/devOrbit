@@ -20,22 +20,8 @@ jobs:
     name: Backend checks
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_DB: devorbit_test
-          POSTGRES_USER: devorbit
-          POSTGRES_PASSWORD: ci-only-password
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U devorbit -d devorbit_test"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
     env:
-      DEVORBIT_TEST_DATABASE_URL: postgres://devorbit:ci-only-password@127.0.0.1:5432/devorbit_test?sslmode=disable
+      CGO_ENABLED: "1"
     defaults:
       run:
         working-directory: server
@@ -51,10 +37,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y tmux
-      - name: Validate Docker Compose
-        env:
-          DEVORBIT_DB_PASSWORD: ci-only-password
-        run: docker compose config --quiet
       - run: go test -race ./...
       - run: go vet ./...
       - run: go build -trimpath -o "$RUNNER_TEMP/devorbit" ./cmd/devorbit
@@ -91,6 +73,10 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: desktop/package-lock.json
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -105,10 +91,14 @@ jobs:
         working-directory: desktop
       - run: npm run build
         working-directory: desktop
+      - run: npm run build:backend
+        working-directory: desktop
       - run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml
 
   package:
     name: Package ${{ matrix.platform }}
+    env:
+      CGO_ENABLED: "1"
     needs: [backend, desktop]
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.runner }}
@@ -121,22 +111,18 @@ jobs:
             runner: ubuntu-22.04
             bundles: deb
             installer: deb/*.deb
-            executable: devorbit
           - platform: windows-x64
             runner: windows-2022
             bundles: nsis
             installer: nsis/*-setup.exe
-            executable: devorbit.exe
           - platform: macos-arm64
             runner: macos-15
             bundles: dmg
             installer: dmg/*.dmg
-            executable: devorbit
           - platform: macos-x64
             runner: macos-15-intel
             bundles: dmg
             installer: dmg/*.dmg
-            executable: devorbit
     defaults:
       run:
         shell: bash
@@ -167,31 +153,20 @@ jobs:
       - name: Generate platform icons from the existing app icon
         run: npm run tauri -- icon src-tauri/icons/icon.png
         working-directory: desktop
+      - name: Test SQLite on the target platform
+        run: go test ./internal/database ./internal/modules/workspace/repository ./internal/modules/serviceconfiguration/repository
+        working-directory: server
       - name: Build desktop installer
         env:
           BUNDLES: ${{ matrix.bundles }}
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
         run: npm run tauri -- build --bundles "$BUNDLES" --config '{"bundle":{"icon":["icons/icon.png","icons/icon.ico","icons/icon.icns"]}}' -- --locked
         working-directory: desktop
-      - name: Build backend
-        env:
-          BACKEND_EXECUTABLE: ${{ matrix.executable }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/backend"
-          go build -trimpath -o "$RUNNER_TEMP/backend/$BACKEND_EXECUTABLE" ./cmd/devorbit
-        working-directory: server
       - name: Collect release files
         env:
-          PLATFORM: ${{ matrix.platform }}
           INSTALLER: ${{ matrix.installer }}
-          BACKEND_EXECUTABLE: ${{ matrix.executable }}
         run: |
-          version=$(node -p 'require("./desktop/src-tauri/tauri.conf.json").version')
-          test -s "$RUNNER_TEMP/backend/$BACKEND_EXECUTABLE"
-          mkdir -p "$RUNNER_TEMP/backend/server" release
-          cp server/compose.yaml server/.env.example "$RUNNER_TEMP/backend/server/"
-          cp docs/install-release.md "$RUNNER_TEMP/backend/README.md"
-          tar -czf "release/devorbit-backend-$version-$PLATFORM.tar.gz" -C "$RUNNER_TEMP/backend" .
+          mkdir -p release
           # The matrix supplies this glob; a missing installer must fail the job.
           cp desktop/src-tauri/target/release/bundle/$INSTALLER release/
       - uses: actions/upload-artifact@v7
@@ -222,11 +197,10 @@ jobs:
       - name: Check assets and generate checksums
         working-directory: release
         run: |
-          test "$(find . -maxdepth 1 -name 'devorbit-backend-*.tar.gz' | wc -l)" -eq 4
           test "$(find . -maxdepth 1 -name '*.deb' | wc -l)" -eq 1
           test "$(find . -maxdepth 1 -name '*-setup.exe' | wc -l)" -eq 1
           test "$(find . -maxdepth 1 -name '*.dmg' | wc -l)" -eq 2
-          sha256sum *.tar.gz *.deb *.exe *.dmg > SHA256SUMS
+          sha256sum *.deb *.exe *.dmg > SHA256SUMS
       - name: Create or update the draft
         env:
           GH_TOKEN: ${{ github.token }}
