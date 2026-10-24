@@ -11,7 +11,7 @@ func TestLoadDefaults(t *testing.T) {
 	for _, key := range []string{"DEVORBIT_HOST", "DEVORBIT_PORT", "DEVORBIT_DATA_DIR", "DEVORBIT_LOG_DIR", "DEVORBIT_SHUTDOWN_TIMEOUT", "DEVORBIT_AUTH_TOKEN_PATH"} {
 		t.Setenv(key, "")
 	}
-	t.Setenv("DEVORBIT_DATABASE_URL", "postgres://user:secret@localhost/test")
+	t.Chdir(t.TempDir())
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -27,7 +27,6 @@ func TestLoadDefaults(t *testing.T) {
 
 func TestLoadValidation(t *testing.T) {
 	cases := []struct{ key, value string }{
-		{"DEVORBIT_DATABASE_URL", ""},
 		{"DEVORBIT_HOST", "0.0.0.0"},
 		{"DEVORBIT_PORT", "70000"},
 		{"DEVORBIT_SHUTDOWN_TIMEOUT", "0s"},
@@ -35,7 +34,6 @@ func TestLoadValidation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.key, func(t *testing.T) {
-			t.Setenv("DEVORBIT_DATABASE_URL", "postgres://localhost/test")
 			t.Setenv(tc.key, tc.value)
 			if _, err := Load(); err == nil {
 				t.Fatal("expected validation error")
@@ -52,7 +50,7 @@ func TestLoadEnvFile(t *testing.T) {
 			if err := os.Mkdir(server, 0700); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(server, ".env"), []byte("# local settings\nDEVORBIT_HOST=127.0.0.1\nDEVORBIT_PORT=7654\nDEVORBIT_DATABASE_URL='postgres://localhost/from-file'\n"), 0600); err != nil {
+			if err := os.WriteFile(filepath.Join(server, ".env"), []byte("# local settings\nDEVORBIT_HOST=127.0.0.1\nDEVORBIT_PORT=7654\nDEVORBIT_SHUTDOWN_TIMEOUT='7s'\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			if fromRoot {
@@ -60,7 +58,7 @@ func TestLoadEnvFile(t *testing.T) {
 			} else {
 				t.Chdir(server)
 			}
-			for _, key := range []string{"DEVORBIT_PORT", "DEVORBIT_DATABASE_URL"} {
+			for _, key := range []string{"DEVORBIT_PORT", "DEVORBIT_SHUTDOWN_TIMEOUT"} {
 				t.Setenv(key, "")
 				if err := os.Unsetenv(key); err != nil {
 					t.Fatal(err)
@@ -71,10 +69,10 @@ func TestLoadEnvFile(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cfg.Host != "127.0.0.2" || cfg.Port != 7654 || cfg.DatabaseURL != "postgres://localhost/from-file" {
-				t.Fatalf("unexpected config: host=%s port=%d database=%s", cfg.Host, cfg.Port, cfg.DatabaseURL)
+			if cfg.Host != "127.0.0.2" || cfg.Port != 7654 || cfg.ShutdownTimeout != 7*time.Second {
+				t.Fatalf("unexpected config: host=%s port=%d timeout=%s", cfg.Host, cfg.Port, cfg.ShutdownTimeout)
 			}
-			if os.Getenv("DEVORBIT_DATABASE_URL") != "" {
+			if os.Getenv("DEVORBIT_SHUTDOWN_TIMEOUT") != "" {
 				t.Fatal(".env values should not be exported to child processes")
 			}
 		})
@@ -83,10 +81,21 @@ func TestLoadEnvFile(t *testing.T) {
 
 func TestLoadEnvFileInvalid(t *testing.T) {
 	t.Chdir(t.TempDir())
-	if err := os.WriteFile(".env", []byte("DEVORBIT_DATABASE_URL='unterminated\n"), 0600); err != nil {
+	if err := os.WriteFile(".env", []byte("DEVORBIT_SHUTDOWN_TIMEOUT='unterminated\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(); err == nil {
 		t.Fatal("expected invalid .env error")
+	}
+}
+
+func TestDesktopChildIgnoresEnvFile(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("DEVORBIT_DESKTOP_CHILD", "1")
+	if err := os.WriteFile(".env", []byte("DEVORBIT_PORT=invalid\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(); err != nil {
+		t.Fatalf("desktop backend should use exported settings only: %v", err)
 	}
 }

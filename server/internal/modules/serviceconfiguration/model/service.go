@@ -25,8 +25,8 @@ type Service struct {
 
 // Identity persists only the YAML key to UUID association needed by logs and running processes.
 type Identity struct {
-	ID          uuid.UUID           `gorm:"type:uuid;primaryKey"`
-	WorkspaceID uuid.UUID           `gorm:"type:uuid;not null;uniqueIndex:idx_identity_workspace_key"`
+	ID          uuid.UUID           `gorm:"type:text;primaryKey;not null"`
+	WorkspaceID uuid.UUID           `gorm:"type:text;not null;uniqueIndex:idx_identity_workspace_key"`
 	Workspace   workspace.Workspace `gorm:"foreignKey:WorkspaceID;constraint:OnDelete:CASCADE"`
 	Key         string              `gorm:"type:varchar(120);not null;uniqueIndex:idx_identity_workspace_key"`
 }

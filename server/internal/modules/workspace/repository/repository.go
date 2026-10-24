@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/prasannashrestha011/devOrbit/internal/dal/query"
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/model"
 	"gorm.io/gorm"
@@ -54,8 +53,7 @@ func (r *Repository) Update(ctx context.Context, id uuid.UUID, changes map[strin
 func (r *Repository) Delete(ctx context.Context, id uuid.UUID) error {
 	result, err := r.q.Workspace.WithContext(ctx).Where(r.q.Workspace.ID.Eq(id)).Delete()
 	if err != nil {
-		var pg *pgconn.PgError
-		if errors.As(err, &pg) && pg.Code == "23503" {
+		if errors.Is(err, gorm.ErrForeignKeyViolated) {
 			return ErrConflict
 		}
 		return err

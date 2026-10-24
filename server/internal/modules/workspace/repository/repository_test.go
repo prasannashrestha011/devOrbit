@@ -3,8 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
-	"os"
-	"strings"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -13,35 +12,16 @@ import (
 	"github.com/prasannashrestha011/devOrbit/internal/modules/workspace/model"
 )
 
-func TestWorkspacePostgres(t *testing.T) {
-	dsn := os.Getenv("DEVORBIT_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("set DEVORBIT_TEST_DATABASE_URL to run PostgreSQL integration test")
-	}
-	if dsn == os.Getenv("DEVORBIT_DATABASE_URL") {
-		t.Fatal("test database URL must differ from the application database URL")
-	}
+func TestWorkspaceSQLite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devorbit.db")
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	db, err := database.Open(ctx, dsn)
+	db, err := database.Open(ctx, path)
 	if err != nil {
-		t.Skip("test PostgreSQL unavailable")
+		t.Fatal(err)
 	}
 	sqlDB, _ := db.DB()
-	sqlDB.SetMaxOpenConns(1)
 	defer sqlDB.Close()
-	var version int
-	if err := db.Raw("SELECT current_setting('server_version_num')::int").Scan(&version).Error; err != nil || version/10000 != 17 {
-		t.Fatalf("PostgreSQL 17 required, got version %d (%v)", version, err)
-	}
-	schema := "devorbit_phase02_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	if err := db.Exec("CREATE SCHEMA " + schema).Error; err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = db.Exec("DROP SCHEMA " + schema + " CASCADE").Error }()
-	if err := db.Exec("SET search_path TO " + schema).Error; err != nil {
-		t.Fatal(err)
-	}
 	for range 2 {
 		if err := database.Migrate(db, &model.Workspace{}); err != nil {
 			t.Fatal(err)
@@ -50,16 +30,12 @@ func TestWorkspacePostgres(t *testing.T) {
 	if !db.Migrator().HasTable(&model.Workspace{}) {
 		t.Fatal("workspace table not created")
 	}
-	other, err := database.Open(ctx, dsn)
+	other, err := database.Open(ctx, path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	otherSQL, _ := other.DB()
-	otherSQL.SetMaxOpenConns(1)
 	defer otherSQL.Close()
-	if err := other.Exec("SET search_path TO " + schema).Error; err != nil {
-		t.Fatal(err)
-	}
 	repo := New(db)
 	first := &model.Workspace{ID: uuid.New(), Name: "first", RootPath: t.TempDir()}
 	second := &model.Workspace{ID: uuid.New(), Name: "second", RootPath: first.RootPath}

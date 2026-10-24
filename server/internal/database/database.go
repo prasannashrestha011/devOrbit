@@ -3,15 +3,30 @@ package database
 import (
 	"context"
 	"errors"
-	"time"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 
-	"gorm.io/driver/postgres"
+	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
 
-func Open(ctx context.Context, dsn string) (*gorm.DB, error) {
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{DisableAutomaticPing: true, Logger: logger.Default.LogMode(logger.Silent)})
+func Open(ctx context.Context, path string) (*gorm.DB, error) {
+	if !filepath.IsAbs(path) {
+		return nil, errors.New("database path must be absolute")
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, errors.New("database file initialization failed")
+	}
+	if err := file.Close(); err != nil {
+		return nil, errors.New("database file close failed")
+	}
+	// URI escaping keeps path characters out of connection options, including on Windows.
+	dsn := url.URL{Scheme: "file", Path: "/" + strings.TrimPrefix(filepath.ToSlash(path), "/"), RawQuery: "_foreign_keys=on&_busy_timeout=5000"}
+	db, err := gorm.Open(sqlite.Open(dsn.String()), &gorm.Config{DisableAutomaticPing: true, TranslateError: true, Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		return nil, errors.New("database connection failed")
 	}
@@ -19,9 +34,8 @@ func Open(ctx context.Context, dsn string) (*gorm.DB, error) {
 	if err != nil {
 		return nil, errors.New("database pool initialization failed")
 	}
-	sqlDB.SetMaxOpenConns(5)
-	sqlDB.SetMaxIdleConns(2)
-	sqlDB.SetConnMaxLifetime(30 * time.Minute)
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
 	if err := sqlDB.PingContext(ctx); err != nil {
 		_ = sqlDB.Close()
 		return nil, errors.New("database ping failed")

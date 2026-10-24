@@ -40,9 +40,12 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 			return fmt.Errorf("initialize application directory: %w", err)
 		}
 	}
+	if err := security.PrivateDirectory(cfg.DataDir); err != nil {
+		return errors.New("application data directory must be private")
+	}
 	connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	db, err := database.Open(connectCtx, cfg.DatabaseURL)
+	db, err := database.Open(connectCtx, filepath.Join(cfg.DataDir, "devorbit.db"))
 	if err != nil {
 		return err
 	}
@@ -101,6 +104,9 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		return fmt.Errorf("listen on %s: %w", address, err)
 	}
 	log.Info("DevOrbit API listening", "address", address)
+	if os.Getenv("DEVORBIT_DESKTOP_CHILD") == "1" {
+		_, _ = fmt.Fprintln(os.Stdout, "DEVORBIT_READY")
+	}
 	serveErr := serve(ctx, server, listener, cfg.ShutdownTimeout)
 	shutdownCtx, stop := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer stop()

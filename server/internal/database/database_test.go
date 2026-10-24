@@ -3,52 +3,35 @@ package database
 import (
 	"context"
 	"os"
-	"strconv"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
-	"time"
 )
 
 type migrationRecord struct {
 	ID uint `gorm:"primaryKey"`
 }
 
-func TestOpenFailureDoesNotExposeDSN(t *testing.T) {
-	secret := "very-secret-password"
-	_, err := Open(context.Background(), "postgres://user:"+secret+"@invalid host/db")
-	if err == nil || strings.Contains(err.Error(), secret) {
+func TestOpenFailureDoesNotExposePath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "private-project", "missing", "devorbit.db")
+	_, err := Open(context.Background(), path)
+	if err == nil || strings.Contains(err.Error(), "private-project") {
 		t.Fatalf("expected safe connection error, got %v", err)
+	}
+	if _, err := Open(context.Background(), "relative.db"); err == nil {
+		t.Fatal("relative database path accepted")
 	}
 }
 
-func TestMigrateRepeatable(t *testing.T) {
-	dsn := os.Getenv("DEVORBIT_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("set DEVORBIT_TEST_DATABASE_URL to run PostgreSQL integration test")
-	}
-	if dsn == os.Getenv("DEVORBIT_DATABASE_URL") {
-		t.Fatal("test database URL must differ from the application database URL")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	db, err := Open(ctx, dsn)
+func TestMigrateRepeatableAndPersistent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devorbit # 50%.db")
+	db, err := Open(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sqlDB, _ := db.DB()
-	sqlDB.SetMaxOpenConns(1)
-	schema := "devorbit_phase01_" + strconv.FormatInt(time.Now().UnixNano(), 10)
-	if err := db.Exec("CREATE SCHEMA " + schema).Error; err != nil {
-		_ = sqlDB.Close()
-		t.Fatal(err)
-	}
-	defer func() {
-		_ = db.Exec("DROP SCHEMA " + schema + " CASCADE").Error
-		_ = sqlDB.Close()
-	}()
-	if err := db.Exec("SET search_path TO " + schema).Error; err != nil {
-		t.Fatal(err)
-	}
+	defer sqlDB.Close()
 	if err := Migrate(db); err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +40,50 @@ func TestMigrateRepeatable(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if !db.Migrator().HasTable(&migrationRecord{}) {
-		t.Fatal("registered model table was not created")
+	if err := db.Create(&migrationRecord{ID: 7}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, _ = db.DB()
+	defer sqlDB.Close()
+	var row migrationRecord
+	if err := db.First(&row).Error; err != nil || row.ID != 7 {
+		t.Fatalf("record did not survive reopening: %+v, %v", row, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
+		t.Fatalf("database permissions = %o", info.Mode().Perm())
+	}
+}
+
+func TestConnectionSettingsSurviveReconnect(t *testing.T) {
+	db, err := Open(context.Background(), filepath.Join(t.TempDir(), "devorbit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, _ := db.DB()
+	defer sqlDB.Close()
+	if sqlDB.Stats().MaxOpenConnections != 1 {
+		t.Fatal("SQLite connections must be serialized")
+	}
+	// Force a fresh connection for each query to check the driver's connection options.
+	sqlDB.SetMaxIdleConns(0)
+	for range 2 {
+		var foreignKeys, busyTimeout int
+		if err := db.Raw("PRAGMA foreign_keys").Scan(&foreignKeys).Error; err != nil || foreignKeys != 1 {
+			t.Fatalf("foreign_keys = %d, error = %v", foreignKeys, err)
+		}
+		if err := db.Raw("PRAGMA busy_timeout").Scan(&busyTimeout).Error; err != nil || busyTimeout != 5000 {
+			t.Fatalf("busy_timeout = %d, error = %v", busyTimeout, err)
+		}
 	}
 }

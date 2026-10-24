@@ -15,7 +15,6 @@ import (
 type Config struct {
 	Host            string
 	Port            int
-	DatabaseURL     string
 	DataDir         string
 	LogDir          string
 	ShutdownTimeout time.Duration
@@ -58,7 +57,6 @@ func Load() (Config, error) {
 	c := Config{
 		Host:            value("DEVORBIT_HOST", "127.0.0.1"),
 		Port:            port,
-		DatabaseURL:     get("DEVORBIT_DATABASE_URL"),
 		DataDir:         dataDir,
 		LogDir:          value("DEVORBIT_LOG_DIR", filepath.Join(dataDir, "logs")),
 		ShutdownTimeout: timeout,
@@ -66,9 +64,6 @@ func Load() (Config, error) {
 	}
 	if ip := net.ParseIP(c.Host); ip == nil || !ip.IsLoopback() {
 		return Config{}, fmt.Errorf("DEVORBIT_HOST must be a loopback IP address")
-	}
-	if c.DatabaseURL == "" {
-		return Config{}, fmt.Errorf("DEVORBIT_DATABASE_URL is required")
 	}
 	for _, path := range []string{c.DataDir, c.LogDir, c.AuthTokenPath} {
 		if !filepath.IsAbs(path) {
@@ -79,6 +74,9 @@ func Load() (Config, error) {
 }
 
 func loadEnv() (map[string]string, error) {
+	if os.Getenv("DEVORBIT_DESKTOP_CHILD") == "1" {
+		return nil, nil
+	}
 	for _, path := range []string{filepath.Join("server", ".env"), ".env"} {
 		values, err := godotenv.Read(path)
 		if errors.Is(err, os.ErrNotExist) {

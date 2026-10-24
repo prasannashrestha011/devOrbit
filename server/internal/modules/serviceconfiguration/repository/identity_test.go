@@ -3,8 +3,8 @@ package repository
 import (
 	"context"
 	"errors"
-	"os"
-	"strings"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,33 +13,19 @@ import (
 	"github.com/prasannashrestha011/devOrbit/internal/modules/serviceconfiguration/model"
 	workspaceModel "github.com/prasannashrestha011/devOrbit/internal/modules/workspace/model"
 	workspaceRepository "github.com/prasannashrestha011/devOrbit/internal/modules/workspace/repository"
+	"gorm.io/gorm"
 )
 
 func TestResolveExistingIdentityAndDeleteWorkspace(t *testing.T) {
-	dsn := os.Getenv("DEVORBIT_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("set DEVORBIT_TEST_DATABASE_URL to run PostgreSQL integration test")
-	}
-	if dsn == os.Getenv("DEVORBIT_DATABASE_URL") {
-		t.Fatal("test database URL must differ from the application database URL")
-	}
+	path := filepath.Join(t.TempDir(), "devorbit.db")
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	db, err := database.Open(ctx, dsn)
+	db, err := database.Open(ctx, path)
 	if err != nil {
-		t.Skip("test PostgreSQL unavailable")
+		t.Fatal(err)
 	}
 	sqlDB, _ := db.DB()
-	sqlDB.SetMaxOpenConns(1)
 	defer sqlDB.Close()
-	schema := "devorbit_identity_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	if err := db.Exec("CREATE SCHEMA " + schema).Error; err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = db.Exec("DROP SCHEMA " + schema + " CASCADE").Error }()
-	if err := db.Exec("SET search_path TO " + schema).Error; err != nil {
-		t.Fatal(err)
-	}
 	if err := database.Migrate(db, &workspaceModel.Workspace{}, &model.Identity{}); err != nil {
 		t.Fatal(err)
 	}
@@ -52,9 +38,54 @@ func TestResolveExistingIdentityAndDeleteWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := database.Migrate(db, &workspaceModel.Workspace{}, &model.Identity{}); err != nil {
+		t.Fatal(err)
+	}
 	again, err := repo.Resolve(ctx, wid, "api")
 	if err != nil || again.ID != first.ID {
 		t.Fatalf("existing identity changed: first=%s again=%v error=%v", first.ID, again, err)
+	}
+	if _, err := repo.Resolve(ctx, uuid.New(), "orphan"); !errors.Is(err, gorm.ErrForeignKeyViolated) {
+		t.Fatalf("expected foreign key violation, got %v", err)
+	}
+	duplicate := model.Identity{ID: uuid.New(), WorkspaceID: wid, Key: "api"}
+	if err := db.Create(&duplicate).Error; !errors.Is(err, gorm.ErrDuplicatedKey) {
+		t.Fatalf("expected duplicate key violation, got %v", err)
+	}
+	other, err := database.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSQL, _ := other.DB()
+	defer otherSQL.Close()
+	repos := []*Repository{repo, New(other)}
+	var wg sync.WaitGroup
+	type result struct {
+		item *model.Identity
+		err  error
+	}
+	results := make(chan result, 16)
+	for i := range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			item, err := repos[i%2].Resolve(ctx, wid, "worker")
+			results <- result{item, err}
+		}()
+	}
+	wg.Wait()
+	close(results)
+	var concurrentID uuid.UUID
+	for result := range results {
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if concurrentID == uuid.Nil {
+			concurrentID = result.item.ID
+		}
+		if result.item.ID != concurrentID {
+			t.Fatal("concurrent creates returned different identities")
+		}
 	}
 	if err := workspaceRepository.New(db).Delete(ctx, wid); err != nil {
 		t.Fatal(err)
