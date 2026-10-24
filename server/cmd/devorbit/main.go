@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -20,6 +21,12 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if os.Getenv("DEVORBIT_DESKTOP_CHILD") == "1" {
+		go func() {
+			_, _ = io.Copy(io.Discard, os.Stdin)
+			stop()
+		}()
+	}
 	if err := app.Run(ctx, cfg, log); err != nil {
 		log.Error("DevOrbit stopped", "error", err)
 		os.Exit(1)

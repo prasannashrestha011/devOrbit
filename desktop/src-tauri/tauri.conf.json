@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.devorbit.desktop",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run build:backend && npm run dev",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build && npm run build:backend",
     "frontendDist": "../dist"
   },
   "app": {
@@ -25,5 +25,5 @@
       "devCsp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost ws://127.0.0.1:1420"
     }
   },
-  "bundle": { "active": true, "icon": ["icons/icon.png"] }
+  "bundle": { "active": true, "icon": ["icons/icon.png"], "externalBin": ["binaries/devorbit"] }
 }

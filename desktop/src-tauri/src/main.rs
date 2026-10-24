@@ -13,7 +13,9 @@ use std::{
     time::Duration,
 };
 use tauri::{ipc::Channel, Emitter, Manager, State};
+use tauri_plugin_dialog::DialogExt;
 
+mod backend_process;
 mod terminal;
 mod traffic;
 
@@ -27,6 +29,15 @@ struct DockerLogTasks(Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>
 struct Reply {
     status: u16,
     body: Value,
+}
+
+fn data_dir() -> Result<PathBuf, String> {
+    match env::var("DEVORBIT_DATA_DIR") {
+        Ok(path) if !path.is_empty() => Ok(PathBuf::from(path)),
+        _ => dirs::config_dir()
+            .map(|base| base.join("devorbit"))
+            .ok_or_else(|| "Cannot locate user config directory".into()),
+    }
 }
 
 fn backend() -> Result<(String, PathBuf), String> {
@@ -44,12 +55,7 @@ fn backend() -> Result<(String, PathBuf), String> {
     if port == 0 {
         return Err("DEVORBIT_PORT must be between 1 and 65535".into());
     }
-    let data_dir = match env::var("DEVORBIT_DATA_DIR") {
-        Ok(path) if !path.is_empty() => PathBuf::from(path),
-        _ => dirs::config_dir()
-            .ok_or("Cannot locate user config directory")?
-            .join("devorbit"),
-    };
+    let data_dir = data_dir()?;
     let token_path = match env::var("DEVORBIT_AUTH_TOKEN_PATH") {
         Ok(path) if !path.is_empty() => PathBuf::from(path),
         _ => data_dir.join("auth-token"),
@@ -64,8 +70,9 @@ fn backend() -> Result<(String, PathBuf), String> {
 }
 
 fn token(path: &PathBuf) -> Result<String, String> {
-    let token = fs::read_to_string(path)
-        .map_err(|_| "Cannot read backend token. Start the Go backend first.".to_string())?;
+    let token = fs::read_to_string(path).map_err(|_| {
+        "Cannot read backend token. Reopen DevOrbit to restart its backend.".to_string()
+    })?;
     if token.len() != 64 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("Backend token has an invalid format".into());
     }
@@ -225,7 +232,7 @@ async fn api_request(method: String, path: String, body: Option<Value>) -> Resul
     let response = request
         .send()
         .await
-        .map_err(|_| "Backend unavailable. Check that the Go server is running.".to_string())?;
+        .map_err(|_| "DevOrbit backend stopped unexpectedly. Reopen DevOrbit.".to_string())?;
     let status = response.status().as_u16();
     let body = if status == 204 {
         Value::Null
@@ -433,8 +440,21 @@ async fn open_quick_controls(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 fn main() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| match backend_process::BackendProcess::start() {
+            Ok(backend) => {
+                app.manage(backend);
+                Ok(())
+            }
+            Err(error) => {
+                app.dialog()
+                    .message(&error)
+                    .title("DevOrbit could not start")
+                    .blocking_show();
+                Err(std::io::Error::other(error).into())
+            }
+        })
         .manage(StreamTask::default())
         .manage(terminal::TerminalTasks::default())
         .manage(DockerLogTasks::default())
@@ -443,6 +463,7 @@ fn main() {
                 if let Some(controls) = window.get_webview_window("quick-controls") {
                     let _ = controls.close();
                 }
+                window.state::<backend_process::BackendProcess>().stop();
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -467,8 +488,13 @@ fn main() {
             start_docker_logs,
             stop_docker_logs
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running DevOrbit");
+        .build(tauri::generate_context!())
+        .expect("error while building DevOrbit");
+    app.run(|handle, event| {
+        if matches!(event, tauri::RunEvent::Exit) {
+            handle.state::<backend_process::BackendProcess>().stop();
+        }
+    });
 }
 
 #[cfg(test)]
