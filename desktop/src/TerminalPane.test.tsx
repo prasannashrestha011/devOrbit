@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ProcessStatus, Service, ShellSession } from "./api";
 
-const calls = vi.hoisted(() => ({ invoke: vi.fn(), focus: vi.fn(), fit: vi.fn(), options: null as { fontFamily: string } | null, onData: (_data: string) => {}, writes: [] as string[] }));
+const calls = vi.hoisted(() => ({ invoke: vi.fn(), focus: vi.fn(), fit: vi.fn(), options: null as { fontFamily: string } | null, onData: (_data: string) => {}, writes: [] as string[], lifecycle: [] as string[] }));
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: calls.invoke,
   Channel: class { onmessage = (_frame: unknown) => {}; },
@@ -13,14 +13,15 @@ vi.mock("@xterm/xterm", () => ({
     cols = 80; rows = 24;
     options: { fontFamily: string };
     constructor(options: { fontFamily: string }) { this.options = options; calls.options = options; }
-    loadAddon() {}
-    open() {}
+    loadAddon(addon: { renderer?: string }) { if (addon.renderer) calls.lifecycle.push(addon.renderer); }
+    open() { calls.lifecycle.push("open"); }
     write(data: string | Uint8Array) { calls.writes.push(typeof data === "string" ? data : new TextDecoder().decode(data)); }
     onData(callback: (data: string) => void) { calls.onData = callback; }
     focus() { calls.focus(); }
     dispose() {}
   },
 }));
+vi.mock("@xterm/addon-canvas", () => ({ CanvasAddon: class { renderer = "canvas"; } }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() { calls.fit(); } } }));
 vi.mock("@xterm/addon-search", () => ({ SearchAddon: class { findNext() {} } }));
 
@@ -29,7 +30,14 @@ import TerminalPane from "./TerminalPane";
 const service = { id: "51d71407-759a-44c0-b46e-87a842998ddd", name: "API", enabled: true } as Service;
 const status = { execution_id: "30c80606-7a89-4b84-94dd-084e33e88baa", state: "running" } as ProcessStatus;
 
-afterEach(() => { cleanup(); calls.invoke.mockReset(); calls.focus.mockReset(); calls.fit.mockReset(); calls.options = null; calls.writes.length = 0; });
+afterEach(() => { cleanup(); calls.invoke.mockReset(); calls.focus.mockReset(); calls.fit.mockReset(); calls.options = null; calls.writes.length = 0; calls.lifecycle.length = 0; });
+
+it("loads the canvas renderer before opening to support strict release CSP", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  calls.invoke.mockResolvedValue(undefined);
+  render(<TerminalPane service={service} status={status} focused expanded busy={false} onFocus={() => {}} />);
+  await waitFor(() => expect(calls.lifecycle).toEqual(["canvas", "open"]));
+});
 
 it("changes the font and refits the active terminal without reconnecting", async () => {
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
@@ -51,12 +59,12 @@ it("streams output and accepts input only from the focused pane, including a lar
   calls.invoke.mockImplementation(async (command: string, args: { channel?: { onmessage: (frame: unknown) => void } }) => {
     if (command === "start_terminal") {
       args.channel?.onmessage({ type: "connected" });
-      args.channel?.onmessage({ type: "output", data: btoa("ready") });
+      args.channel?.onmessage({ type: "output", data: btoa("\x1b[31mready\x1b[0m") });
     }
   });
   const props = { service, status, focused: false, expanded: false, busy: false, onFocus: vi.fn(), onExpand: vi.fn(), onAction: vi.fn() };
   const view = render(<TerminalPane {...props} />);
-  await waitFor(() => expect(calls.writes.join("")).toContain("ready"));
+  await waitFor(() => expect(calls.writes.join("")).toContain("\x1b[31mready\x1b[0m"));
   await waitFor(() => expect(calls.invoke).toHaveBeenCalledWith("terminal_resize", { serviceId: service.id, executionId: status.execution_id, cols: 80, rows: 24 }));
   calls.onData("ignored");
   expect(calls.invoke).not.toHaveBeenCalledWith("terminal_input", expect.anything());

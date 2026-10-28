@@ -63,8 +63,8 @@ export default function TerminalPane({ service, status, shell, docker, workspace
         });
     };
     async function mount() {
-      const [{ Terminal }, { FitAddon }, { SearchAddon }] = await Promise.all([
-        import("@xterm/xterm"), import("@xterm/addon-fit"), import("@xterm/addon-search"),
+      const [{ Terminal }, { FitAddon }, { SearchAddon }, { CanvasAddon }] = await Promise.all([
+        import("@xterm/xterm"), import("@xterm/addon-fit"), import("@xterm/addon-search"), import("@xterm/addon-canvas"),
       ]);
       if (disposed || !host.current) return;
       instance = new Terminal({ scrollback: 1000, convertEol: false, screenReaderMode: true, cursorBlink: true, fontSize: 14, fontFamily: fontFamilyRef.current ? `${JSON.stringify(fontFamilyRef.current)}, monospace` : "monospace", theme: { background: "#080b10", foreground: "#dbe5f2", cursor: "#58d6c0" } });
@@ -72,6 +72,8 @@ export default function TerminalPane({ service, status, shell, docker, workspace
       const finder = new SearchAddon();
       instance.loadAddon(fit);
       instance.loadAddon(finder);
+      // Load before open so strict release CSP never sees the DOM renderer's inline CSS.
+      instance.loadAddon(new CanvasAddon());
       instance.open(host.current);
       if (focusedRef.current) instance.focus();
       terminal.current = instance;
