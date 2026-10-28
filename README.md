@@ -41,6 +41,8 @@ Use **Quick controls** in the desktop toolbar to open an always-on-top window fo
 
 `npm run build` checks and builds the web UI; `npm test` runs its focused API and lifecycle tests. `npm run tauri build` builds a native package with the Go backend once the OS prerequisites are installed. Run `npm run build:backend` before a direct `cargo test` from `desktop/src-tauri`.
 
+To check a packaged build locally, run `./build.sh linux` for a `.deb`, `./build.sh windows` in Windows Git Bash for an `.exe`, or `./build.sh macos` for a `.dmg`. Run it on the named OS. The installer appears under `desktop/src-tauri/target/release/bundle/`.
+
 ## Storage and releases
 
 Workspace metadata is stored in `<DEVORBIT_DATA_DIR>/devorbit.db`. The backend and desktop run natively; Docker is only needed when managing Docker Compose projects. See [CI/CD and releases](docs/ci-cd.md) for GitHub Actions checks and creating downloadable builds for Linux, Windows, and macOS.
