@@ -1,7 +1,7 @@
 ---
 layout: ../../layouts/Docs.astro
 label: Workspace configuration
-title: Your stack, in a YAML file.
+title: Workspace configuration
 description: Keep service commands in one readable file, with a clear source of truth for every workspace.
 source: server/README.md
 ---

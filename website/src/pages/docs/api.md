@@ -1,7 +1,7 @@
 ---
 layout: ../../layouts/Docs.astro
 label: API reference
-title: A local API for your stack.
+title: API reference
 description: The core routes for workspace configuration, service lifecycle, terminal streams, and persisted logs.
 source: server/README.md
 ---

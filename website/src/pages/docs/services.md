@@ -1,7 +1,7 @@
 ---
 layout: ../../layouts/Docs.astro
 label: Services & terminals
-title: Follow every process.
+title: Services & terminals
 description: Start your services, work in their terminals, and inspect the output without losing your workspace context.
 source: server/README.md
 ---
@@ -20,7 +20,7 @@ Every service execution has a PTY session. The desktop uses xterm.js for the ter
 
 On Linux and macOS, service terminals use private tmux sessions; Windows uses ConPTY. Closing a terminal viewer detaches it without stopping its service. The backend continues draining output and retains up to 1 MiB for reconnect replay.
 
-Workspace shell terminals are separate sessions in the workspace root. Up to 16 sessions can exist per workspace, including exited sessions not yet closed. Shell output is not written to service logs. Backend shutdown ends these sessions.
+Workspace shell terminals are separate sessions in the user's home directory. Up to 16 sessions can exist per workspace, including exited sessions not yet closed. Shell output is not written to service logs. Backend shutdown ends these sessions.
 
 ## Read logs and events
 

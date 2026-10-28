@@ -1,7 +1,7 @@
 ---
 layout: ../../layouts/Docs.astro
 label: Getting started
-title: From installation to running services.
+title: Getting started
 description: Install DevOrbit or build it from source, then bring your first project into the app.
 source: README.md
 ---

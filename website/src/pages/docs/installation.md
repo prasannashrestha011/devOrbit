@@ -1,7 +1,7 @@
 ---
 layout: ../../layouts/Docs.astro
 label: Installation
-title: Install and open DevOrbit.
+title: Installation
 description: One desktop installer includes the backend and its local SQLite database.
 source: docs/install-release.md
 ---
