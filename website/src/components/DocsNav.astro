@@ -1,0 +1,9 @@
+---
+import { guideGroups } from '../data/navigation';
+---
+<nav class="docs-nav" aria-label="Documentation">
+  {guideGroups.map(({ label, links }) => <div class="nav-group">
+    <p>{label}</p>
+    {links.map(({ href, label }) => <a href={href} aria-current={href === Astro.url.pathname ? 'page' : undefined}>{label}</a>)}
+  </div>)}
+</nav>

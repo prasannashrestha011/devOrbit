@@ -1,34 +1,37 @@
 ---
-import type { MarkdownLayoutProps } from 'astro';
 import Site from './Site.astro';
 import Icon from '../components/Icon.astro';
-type Props = MarkdownLayoutProps<{ title: string; description: string; label: string; source: string }>;
+import DocsNav from '../components/DocsNav.astro';
+import { guides, repo } from '../data/navigation';
+interface Props {
+  frontmatter: { title: string; description: string; label: string; source: string };
+  headings: { depth: number; slug: string; text: string }[];
+}
 const { frontmatter } = Astro.props;
-const headings = Astro.props.headings.filter(({ depth }) => depth === 2);
-const guides = [
-  { href: '/docs/', label: 'Getting started' },
-  { href: '/docs/installation/', label: 'Installation' },
-  { href: '/docs/configuration/', label: 'Workspace configuration' },
-  { href: '/docs/services/', label: 'Services & terminals' },
-  { href: '/docs/api/', label: 'API reference' },
-];
+const headings = Astro.props.headings.filter(({ depth }) => depth === 2 || depth === 3);
 const current = guides.findIndex(({ href }) => href === Astro.url.pathname);
+const previous = guides[current - 1];
 const next = guides[current + 1];
+const source = `${repo}/blob/main/${frontmatter.source}`;
 ---
 <Site title={frontmatter.label} description={frontmatter.description}>
-  <main id="main" class="container docs-layout">
-    <aside class="docs-sidebar">
-      <nav class="desktop-docs-nav" aria-label="Documentation"><span class="rail-label">Documentation</span>{guides.map(({ href, label }) => <a href={href} aria-current={href === Astro.url.pathname ? 'page' : undefined}>{label}</a>)}</nav>
-      <details class="mobile-docs-nav"><summary>Documentation menu</summary><nav aria-label="Documentation">{guides.map(({ href, label }) => <a href={href} aria-current={href === Astro.url.pathname ? 'page' : undefined}>{label}</a>)}</nav></details>
-      <a class="source-link" href={`https://github.com/prasannashrestha011/devOrbit/blob/main/${frontmatter.source}`}>View source on GitHub <Icon /></a>
-    </aside>
-    <article class="docs-article">
-      <div class="breadcrumb"><a href="/docs/">Documentation</a><span aria-hidden="true">/</span><span>{frontmatter.label}</span></div>
-      <h1>{frontmatter.title}</h1>
-      <p class="docs-intro">{frontmatter.description}</p>
-      <div class="prose"><slot /></div>
-      {next && <a class="next-guide" href={next.href}>Next: {next.label} <Icon /></a>}
-    </article>
-    <nav class="toc" aria-label="On this page"><span class="rail-label">On this page</span>{headings.map(({ slug, text }) => <a href={`#${slug}`}>{text.replace(/^\d+\. /, '')}</a>)}</nav>
+  <main id="main" class="docs-layout">
+    <aside class="docs-sidebar"><DocsNav /></aside>
+    <div class="docs-center">
+      <details class="mobile-docs-nav"><summary>Documentation menu <Icon name="chevron" /></summary><DocsNav /></details>
+      <article class="docs-article">
+        <nav class="breadcrumb" aria-label="Breadcrumb"><a href="/docs/">Documentation</a><span aria-hidden="true">/</span><span>{frontmatter.label}</span></nav>
+        <h1>{frontmatter.title}</h1>
+        <p class="docs-intro">{frontmatter.description}</p>
+        <details class="mobile-toc"><summary>On this page <Icon name="chevron" /></summary><nav aria-label="On this page">{headings.map(({ slug, text, depth }) => <a class:list={{ nested: depth === 3 }} href={`#${slug}`}>{text}</a>)}</nav></details>
+        <div class="prose"><slot /></div>
+        <a class="source-link" href={source}>View source on GitHub <Icon /></a>
+        <nav class="page-pagination" aria-label="Documentation pages">
+          {previous ? <a href={previous.href}><span>Previous</span><strong>{previous.label}</strong></a> : <span />}
+          {next && <a class="next-page" href={next.href}><span>Next</span><strong>{next.label} <Icon /></strong></a>}
+        </nav>
+      </article>
+    </div>
+    <aside class="toc"><nav aria-label="On this page"><p>On this page</p>{headings.map(({ slug, text, depth }) => <a class:list={{ nested: depth === 3 }} href={`#${slug}`}>{text}</a>)}</nav><a class="source-link" href={source}>View source <Icon /></a></aside>
   </main>
 </Site>

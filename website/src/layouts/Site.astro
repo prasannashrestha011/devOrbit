@@ -1,14 +1,15 @@
 ---
 import '../styles/global.css';
+import Icon from '../components/Icon.astro';
+import { repo } from '../data/navigation';
 interface Props { title: string; description: string; }
 const { title, description } = Astro.props;
 const path = Astro.url.pathname;
 const links = [
   { href: '/', label: 'Overview' },
-  { href: '/architecture/', label: 'Architecture' },
   { href: '/docs/', label: 'Documentation' },
+  { href: '/architecture/', label: 'Architecture' },
 ];
-const repo = 'https://github.com/prasannashrestha011/devOrbit';
 ---
 <!doctype html>
 <html lang="en">
@@ -16,27 +17,48 @@ const repo = 'https://github.com/prasannashrestha011/devOrbit';
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content={description} />
-    <meta name="theme-color" content="#087f6f" />
+    <meta name="theme-color" content="#ffffff" />
     <meta property="og:title" content={`${title} | DevOrbit`} />
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preload" href="/fonts/ibm-plex-sans.ttf" as="font" type="font/ttf" crossorigin />
     <title>{title} | DevOrbit</title>
+    <script is:inline>
+      try { const theme = localStorage.getItem('devorbit.theme'); if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme; } catch {}
+    </script>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="site-header">
-      <div class="container header-inner">
+      <div class="header-inner">
         <a class="brand" href="/" aria-label="DevOrbit home"><span class="brand-icon" aria-hidden="true"><span></span></span><span>Dev<span class="brand-light">Orbit</span></span></a>
         <nav class="primary-nav" aria-label="Main navigation">
           {links.map(({ href, label }) => <a href={href} aria-current={(href === '/' ? path === href : path.startsWith(href)) ? 'page' : undefined}>{label}</a>)}
-          <a href={repo}>GitHub</a>
         </nav>
+        <div class="header-tools">
+          <button class="search-trigger" type="button" data-search-open hidden aria-label="Search documentation"><Icon name="search" /><span>Search docs…</span><kbd>Ctrl K</kbd></button>
+          <a class="github-link" href={repo} aria-label="DevOrbit on GitHub"><Icon name="github" /><span>GitHub</span></a>
+          <button class="icon-button theme-toggle" type="button" data-theme-toggle hidden aria-label="Switch color theme"><span class="light-icon"><Icon name="sun" /></span><span class="dark-icon"><Icon name="moon" /></span></button>
+          <details class="mobile-site-nav">
+            <summary>Menu <Icon name="chevron" /></summary>
+            <nav aria-label="Main navigation">{links.map(({ href, label }) => <a href={href}>{label}</a>)}</nav>
+          </details>
+        </div>
       </div>
     </header>
     <slot />
     <footer class="site-footer container">
-      <a href="/">DevOrbit</a><span>Built for local development.</span><a href={repo}>GitHub</a>
+      <div><a class="footer-brand" href="/">DevOrbit</a><span>Built for local development.</span></div>
+      <nav aria-label="Footer"><a href="/docs/">Documentation</a><a href="/docs/contributing/">Contribute <Icon /></a></nav>
     </footer>
+    <dialog class="search-dialog" aria-labelledby="search-title">
+      <div class="search-heading"><h2 id="search-title">Search documentation</h2><button type="button" class="icon-button" data-search-close aria-label="Close search"><Icon name="close" /></button></div>
+      <form role="search"><label class="sr-only" for="docs-search">Search documentation</label><div class="search-field"><Icon name="search" /><input id="docs-search" name="q" type="search" placeholder="Search guides, commands, or concepts…" autocomplete="off" spellcheck="false" /></div></form>
+      <div class="search-body"><p class="search-status" role="status" aria-live="polite"></p><ul class="search-results"></ul><button class="button secondary" type="button" data-search-retry hidden>Retry search</button></div>
+      <div class="search-help"><span><kbd>↑</kbd> <kbd>↓</kbd> to navigate · <kbd>Enter</kbd> to open</span><span><kbd>Esc</kbd> to close</span></div>
+    </dialog>
+    <div class="sr-only" id="copy-status" role="status" aria-live="polite"></div>
+    <script src="../scripts/site.ts"></script>
   </body>
 </html>

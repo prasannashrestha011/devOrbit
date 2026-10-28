@@ -1,0 +1,8 @@
+---
+import { Code } from 'astro:components';
+interface Props { code: string; lang?: string; title: string; }
+const { code, lang = 'sh', title } = Astro.props;
+---
+<div class="code-example" data-code-title={title}>
+  <Code code={code} lang={lang} theme="github-dark" />
+</div>
