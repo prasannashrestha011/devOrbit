@@ -66,8 +66,7 @@ func (m *Manager) Create(ctx context.Context, workspaceID uuid.UUID) (Session, e
 	if m.closed {
 		return Session{}, process.ErrClosed
 	}
-	workspace, err := m.workspaces.Get(ctx, workspaceID)
-	if err != nil {
+	if _, err := m.workspaces.Get(ctx, workspaceID); err != nil {
 		return Session{}, err
 	}
 	count := 0
@@ -79,6 +78,10 @@ func (m *Manager) Create(ctx context.Context, workspaceID uuid.UUID) (Session, e
 	if count >= maxPerWorkspace {
 		return Session{}, ErrLimit
 	}
+	home, err := os.UserHomeDir()
+	if err != nil || !filepath.IsAbs(home) {
+		return Session{}, process.ErrInvalid
+	}
 	id, err := uuid.NewRandom()
 	if err != nil {
 		return Session{}, err
@@ -88,7 +91,7 @@ func (m *Manager) Create(ctx context.Context, workspaceID uuid.UUID) (Session, e
 	if runtime.GOOS != "windows" {
 		env = map[string]string{"TERM": "xterm-256color"}
 	}
-	status, err := m.supervisor.Start(id, process.Config{WorkspaceID: workspaceID, Command: command, Dir: workspace.RootPath, Env: env, Interactive: true})
+	status, err := m.supervisor.Start(id, process.Config{WorkspaceID: workspaceID, Command: command, Dir: home, Env: env, Interactive: true})
 	if err != nil {
 		_ = m.supervisor.Forget(id)
 		return Session{}, err

@@ -101,7 +101,7 @@ func writeOperationError(w http.ResponseWriter, err error) {
 	case errors.Is(err, shellterminal.ErrLimit):
 		writeError(w, http.StatusConflict, "terminal_limit", "workspace terminal limit reached")
 	case errors.Is(err, process.ErrInvalid):
-		writeError(w, http.StatusUnprocessableEntity, "terminal_unavailable", "shell or workspace directory unavailable")
+		writeError(w, http.StatusUnprocessableEntity, "terminal_unavailable", "shell or home directory unavailable")
 	case errors.Is(err, process.ErrClosed):
 		writeError(w, http.StatusServiceUnavailable, "shutting_down", "terminal manager is shutting down")
 	default:

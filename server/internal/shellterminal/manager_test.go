@@ -5,6 +5,7 @@ package shellterminal
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -31,8 +32,10 @@ func (s *workspaceStore) Delete(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
-func TestShellSessionsAreIndependentAndRetainOutputUntilClosed(t *testing.T) {
+func TestShellSessionsStartInHomeAndRetainOutputUntilClosed(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	root := t.TempDir()
 	store := &workspaceStore{workspace: &model.Workspace{ID: uuid.New(), RootPath: root}}
 	m := New(store, 50*time.Millisecond)
@@ -81,8 +84,8 @@ func TestShellSessionsAreIndependentAndRetainOutputUntilClosed(t *testing.T) {
 	for _, frame := range frames {
 		output.Write(frame.Data)
 	}
-	if !strings.Contains(output.String(), root) {
-		t.Fatalf("shell did not run in workspace root: %q", output.String())
+	if !strings.Contains(output.String(), home) || strings.Contains(output.String(), root) {
+		t.Fatalf("shell did not run in user home directory: %q", output.String())
 	}
 	select {
 	case <-live:
@@ -160,5 +163,24 @@ func TestShutdownEndsShellSessions(t *testing.T) {
 	}
 	if _, err := m.Create(context.Background(), store.workspace.ID); !errors.Is(err, process.ErrClosed) {
 		t.Fatalf("create after shutdown: %v", err)
+	}
+}
+
+func TestShellRejectsUnavailableHome(t *testing.T) {
+	for _, home := range []string{"", ".", filepath.Join(t.TempDir(), "missing")} {
+		t.Run(home, func(t *testing.T) {
+			t.Setenv("SHELL", "/bin/sh")
+			t.Setenv("HOME", home)
+			store := &workspaceStore{workspace: &model.Workspace{ID: uuid.New(), RootPath: t.TempDir()}}
+			m := New(store, 50*time.Millisecond)
+			t.Cleanup(func() { _ = m.Shutdown(context.Background()) })
+			if _, err := m.Create(context.Background(), store.workspace.ID); !errors.Is(err, process.ErrInvalid) {
+				t.Fatalf("create with unavailable home: %v", err)
+			}
+			sessions, err := m.List(context.Background(), store.workspace.ID)
+			if err != nil || len(sessions) != 0 {
+				t.Fatalf("failed create left sessions: %+v, %v", sessions, err)
+			}
+		})
 	}
 }
