@@ -27,16 +27,25 @@ For branch protection, require **Backend checks** and **Desktop checks** after t
 
 ## Create a release
 
-1. Keep the version synchronized in `desktop/package.json`, `desktop/package-lock.json` (top level and root package), `desktop/src-tauri/tauri.conf.json`, `desktop/src-tauri/Cargo.toml`, and the `devorbit-desktop` entry in `desktop/src-tauri/Cargo.lock`.
-2. Commit the release changes and push `main`. After its checks pass, tag that commit with the matching version. For the current `0.1.0`:
+1. Set the next version from `desktop` using npm; its version hook synchronizes the Tauri and Cargo versions, and npm updates both package manifests. Do not edit `package.json` alone. For example:
 
    ```sh
-   git tag v0.1.0
-   git push origin v0.1.0
+   cd desktop
+   npm version 0.1.3 --no-git-tag-version
+   cd ..
+   ```
+
+2. Commit all five changed manifests and lockfiles and push `main`. After its checks pass, tag that commit with the matching version:
+
+   ```sh
+   git tag v0.1.3
+   git push origin v0.1.3
    ```
 
 3. Wait for the tag workflow. Download the installers from the draft, follow [the installation instructions](install-release.md), and test the app on each target platform.
 4. Review the release notes and publish the draft when ready.
+
+A tag points to a specific commit. Rerunning a failed tag uses that commit's files, so version fixes must be committed before creating the release tag.
 
 The workflow generates platform icons from the existing PNG and uses Tauri's native packaging. The desktop starts its bundled backend and stops it on exit. The workflow does not publish automatically, deploy a server, or install an updater. Windows code signing and macOS Developer ID signing/notarization still require certificates and a separate setup; these builds are for initial distribution and testing.
 
