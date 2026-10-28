@@ -1,35 +1,40 @@
 ---
 import Site from '../layouts/Site.astro';
 import Icon from '../components/Icon.astro';
-const services = [
-  ['api', 'go run ./cmd/api'],
-  ['web', 'npm run dev'],
-  ['worker', 'python worker.py'],
-];
+import CodeBlock from '../components/CodeBlock.astro';
+import { repo } from '../data/navigation';
+const configuration = `services:
+  api:
+    command: go run ./cmd/api
+    cwd: backend
+  web:
+    command: npm run dev
+    cwd: frontend`;
+const quickstart = `cd desktop && npm ci && cd ..
+./dev.sh`;
 ---
-<Site title="Your local stack, in one place" description="DevOrbit brings your local project services, terminals, and logs into a single desktop workspace. Explore the architecture and get started.">
-  <main id="main" class="container">
-    <section class="hero" aria-labelledby="hero-title">
-      <div class="hero-copy">
-        <h1 id="hero-title">Your local stack.<br />One place to<br /><span>keep it running.</span></h1>
-        <p class="lead">Bring your project services, terminals, and logs into a single desktop workspace. Define your stack in YAML. Run it with DevOrbit.</p>
-        <div class="hero-actions"><a class="button" href="/docs/">Get started <Icon /></a><a class="text-link" href="/architecture/">Explore the architecture <Icon /></a></div>
+<Site title="Your local development workspace" description="Manage services, terminals, Docker Compose, and local HTTP traffic in one desktop workspace. Meet DevOrbit.">
+  <main id="main">
+    <section class="hero container">
+      <div class="hero-copy"><h1>Your local stack.<br />One place to run it.</h1><p>Services, terminals, Docker Compose, and HTTP traffic. Bring your development workflow into one desktop workspace.</p><div class="hero-actions"><a class="button" href="/docs/">Get started <Icon /></a><a class="button secondary" href={repo}><Icon name="github" /> View on GitHub</a></div><p class="hero-note">A desktop app for the projects on your machine.</p></div>
+      <figure class="product-preview"><a href="/images/workspace.webp" aria-label="View full-size DevOrbit desktop screenshot"><img src="/images/workspace.webp" width="1440" height="900" alt="DevOrbit workspace showing API and web services running, a stopped worker, service controls, and terminal access." fetchpriority="high" /></a><figcaption><span>DevOrbit desktop · Example workspace data</span><a href="/images/workspace.webp">View full size <Icon /></a></figcaption></figure>
+    </section>
+    <section class="configuration-section container">
+      <div><h2>Your commands.<br />Your configuration.</h2><p>Describe your services in a workspace YAML file. Keep commands and working directories together, then start, stop, and restart from DevOrbit.</p><a class="text-link" href="/docs/configuration/">Explore workspace configuration <Icon /></a></div>
+      <div><CodeBlock code={configuration} lang="yaml" title=".devorbit/workspace.yaml" /><p class="code-caption">An example API and frontend, configured in one file.</p></div>
+    </section>
+    <section class="workflow-section container" aria-labelledby="workflow-title">
+      <div class="section-heading"><h2 id="workflow-title">Stay close to what’s running.</h2><p>Follow the process, from command to request.</p></div>
+      <div class="workflow-links">
+        <a href="/docs/services/#use-interactive-terminals"><Icon name="terminal" /><h3>Services & terminals <Icon /></h3><p>Control processes, open interactive terminals, and follow their output.</p></a>
+        <a href="/docs/docker/"><Icon name="layers" /><h3>Docker Compose <Icon /></h3><p>Find Compose projects and manage their services alongside your local stack.</p></a>
+        <a href="/docs/traffic/"><Icon name="activity" /><h3>Traffic inspector <Icon /></h3><p>Route local HTTP requests through a gateway to inspect exchanges.</p></a>
       </div>
-      <figure class="workspace-preview">
-        <div class="diagram-label">Your workspace</div>
-        <div class="service-list">
-          {services.map(([name, command]) => <div class="service-row"><span class="service-name"><span class="status-dot" aria-hidden="true"></span>{name}</span><code>{command}</code></div>)}
-        </div>
-        <div class="workspace-connector" aria-hidden="true"><Icon /></div>
-        <div class="workspace-control"><strong>DevOrbit</strong><span>Start · Stop · Restart · Inspect</span></div>
-        <figcaption>A workflow illustration. Your commands, your runtimes.</figcaption>
-      </figure>
     </section>
-    <section class="feature-strip" aria-label="Why DevOrbit">
-      <div><span class="feature-number">01</span><h2>Configuration that travels</h2><p>Keep service commands in <code>.devorbit/workspace.yaml</code>, alongside your project.</p></div>
-      <div><span class="feature-number">02</span><h2>A clear view of your stack</h2><p>Manage processes, open terminals, and follow logs from one workspace.</p></div>
-      <div><span class="feature-number">03</span><h2>Local by design</h2><p>A Tauri desktop app connects to a Go backend on your machine.</p></div>
+    <section class="architecture-teaser container"><div><h2>Local by design.</h2><p>A Tauri desktop, a Go backend, and configuration you can read.</p></div><a class="text-link" href="/architecture/">See how it fits together <Icon /></a></section>
+    <section class="quickstart-section container" aria-labelledby="quickstart-title">
+      <div><h2 id="quickstart-title">Start with your next project.</h2><p>Choose a desktop build for your platform, or run DevOrbit from source.</p><a class="button" href="/docs/installation/">Installation guide <Icon /></a></div>
+      <div class="source-start"><h3>Building from source?</h3><p>From a repository checkout, after installing the <a href="/docs/#before-you-start">prerequisites</a>:</p><CodeBlock code={quickstart} title="Repository root · Linux / macOS" /><a class="text-link" href="/docs/#2-launch-devorbit">Full setup and Windows instructions <Icon /></a></div>
     </section>
-    <section class="docs-cta"><h2>Understand the pieces. Make them yours.</h2><a class="text-link" href="/docs/">Read the documentation <Icon /></a></section>
   </main>
 </Site>
