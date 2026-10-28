@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Box, ChevronDown, FileCode2, FileText, Hammer, MoreHorizontal, Play, RefreshCw, RotateCw, Square, Trash2 } from "lucide-react";
 import { api, type DockerAction, type DockerOperation, type DockerSnapshot } from "./api";
+import DockerError from "./DockerError";
 import DockerServiceDetails, { type DockerServiceTab } from "./DockerServiceDetails";
 
 function message(error: unknown) { return error instanceof Error ? error.message : String(error); }
@@ -132,7 +133,7 @@ export default function DockerPanel({ workspaceId }: { workspaceId: string }) {
           </div></details>
         </div></div>}
       </div>
-      {snapshot.error && <p className="docker-error" role="alert">{snapshot.error}</p>}
+      {snapshot.error && <DockerError error={snapshot.error} title="Could not load Compose services" />}
       {project && <div className="docker-services">
         <div className="docker-services-heading"><h3><button type="button" className="docker-services-toggle" aria-expanded={servicesExpanded} onClick={() => setServicesExpanded((expanded) => !expanded)}>Compose services <ChevronDown size={16} aria-hidden="true" /></button></h3><span>{project.services.length} defined in {project.name}</span></div>
         {servicesExpanded && project.services.map((service) => {
@@ -172,6 +173,6 @@ export default function DockerPanel({ workspaceId }: { workspaceId: string }) {
     </>}
     {busy && <p role="status" className="docker-muted">{pending ? "Starting Docker operation…" : `${operation?.action} in progress…`} {operation?.state === "running" && <button className="text-button" onClick={() => api.cancelDockerOperation(workspaceId, operation.id).catch((problem) => setError(message(problem)))}>Cancel</button>}</p>}
     {notice && <p role="status" className="docker-availability ready">{notice}</p>}
-    {error && <p role="alert" className="docker-error">{error}</p>}
+    {error && <DockerError error={error} />}
   </section>;
 }

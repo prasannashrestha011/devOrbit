@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { api, type DockerSnapshot, type DockerTerminal } from "./api";
+import DockerError from "./DockerError";
 import TerminalPane from "./TerminalPane";
 import TrafficInspector from "./TrafficInspector";
 
@@ -107,7 +108,7 @@ export default function DockerServiceDetails({ workspaceId, file, service, tab, 
       {terminal ? <TerminalPane key={terminal.id} docker={terminal} workspaceId={workspaceId} focused expanded busy={busy} onFocus={() => {}} onClose={() => void closeTerminal()} onStopped={() => void closeTerminal()} /> : <div className="docker-detail-terminal-start">
         {running.length ? <><label>Container <select aria-label="Terminal container" value={selected} onChange={(event) => setSelectedContainer(event.target.value)}>{running.map((container) => <option key={container.id} value={container.id}>{container.name}</option>)}</select></label><button className="button primary" disabled={busy} onClick={() => { setBusy(true); setError(""); api.createDockerTerminal(workspaceId, file, selected).then(setTerminal).catch((problem) => setError(String(problem))).finally(() => setBusy(false)); }}>Open terminal</button></> : <p className="docker-muted">Start a container to open its terminal.</p>}
       </div>}
-      {error && <p className="docker-error" role="alert">{error}</p>}
+      {error && <DockerError error={error} />}
     </div>}
     {tab === "inspect" && <pre className="docker-detail-inspect" role="tabpanel">{JSON.stringify(service, null, 2)}</pre>}
     {tab === "traffic" && <TrafficInspector workspaceId={workspaceId} kind="docker" serviceKey={service.name} file={file} ports={[...new Map(service.containers.filter((container) => container.state === "running").flatMap((container) => container.ports).filter((port) => port.published && (!port.protocol || port.protocol === "tcp") && (!port.host || port.host === "0.0.0.0" || port.host.startsWith("127."))).map((port) => [port.published, { key: port.published, label: `${port.published} → ${port.target}/tcp` }])).values()]} />}

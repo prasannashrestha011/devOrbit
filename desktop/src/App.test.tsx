@@ -218,6 +218,21 @@ it("lists detected Docker services in the workspace overview when the Engine is 
   expect(section.textContent).toContain("postgres:16");
 });
 
+it("shows actionable Compose errors and removes them after a successful refresh", async () => {
+  const snapshot = {
+    availability: { state: "ready", message: "Docker Compose and Docker Engine are ready." },
+    candidates: [{ file: "compose.yaml", files: ["compose.yaml"] }],
+    error: "docker compose config --format json: required variable MINIO_ROOT_USER is missing a value: set MINIO_ROOT_USER in compose.env: exit status 1",
+  };
+  dockerSnapshot = snapshot;
+  render(<App />);
+  expect((await screen.findByRole("alert")).textContent).toContain("Compose configuration is incomplete");
+  expect(screen.getByRole("listitem").textContent).toBe("MINIO_ROOT_USER");
+  dockerSnapshot = { ...snapshot, error: "" };
+  fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+});
+
 it.each(["ready", "engine_unavailable"])("opens a workspace containing a Docker service with null ports (%s)", async (state) => {
   const other = { ...workspace, id: tid, name: "Docker Worker" };
   const handleRequest = invoke.getMockImplementation()!;

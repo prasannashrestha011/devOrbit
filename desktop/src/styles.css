@@ -2803,7 +2803,50 @@ h2 {
 }
 
 .docker-error {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  background: var(--surface-inset);
+  color: var(--text-main);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.docker-error > strong {
   color: var(--danger);
+}
+
+.docker-error p {
+  max-width: 75ch;
+  margin: 8px 0;
+}
+
+.docker-error ul {
+  margin: 8px 0;
+  padding-left: 24px;
+}
+
+.docker-error summary {
+  width: fit-content;
+  margin-top: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.docker-error summary:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 4px;
+}
+
+.docker-error pre {
+  max-height: 280px;
+  overflow: auto;
+  margin: 12px 0 0;
+  color: var(--text-secondary);
+  font: 13px/1.6 "JetBrains Mono", monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 @container (max-width: 680px) {
