@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"time"
 
@@ -32,6 +33,11 @@ import (
 )
 
 func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
+	if runtime.GOOS != "windows" && os.Getenv("DEVORBIT_DESKTOP_CHILD") == "1" {
+		if err := loadShellPath(ctx); err != nil {
+			log.Warn("Could not load shell PATH; using the desktop environment")
+		}
+	}
 	if ip := net.ParseIP(cfg.Host); ip == nil || !ip.IsLoopback() || cfg.Port < 1 || cfg.Port > 65535 {
 		return errors.New("API listen address must be a loopback IP and valid port")
 	}
