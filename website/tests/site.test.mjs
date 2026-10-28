@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import { test } from 'node:test';
+import { searchEntries, excerpt } from '../src/scripts/search.mjs';
 
 const dist = resolve('dist');
 const files = readdirSync(dist, { recursive: true }).filter((file) => statSync(resolve(dist, file)).isFile());
@@ -10,7 +11,7 @@ const pages = new Map(files.filter((file) => file.endsWith('.html')).map((file) 
 ]));
 
 test('all requested pages have a title, description, main landmark, and one heading', () => {
-  for (const route of ['', 'architecture/', 'docs/', 'docs/installation/', 'docs/configuration/', 'docs/services/', 'docs/api/']) {
+  for (const route of ['', 'architecture/', 'docs/', ...['installation', 'configuration', 'services', 'api', 'workspaces', 'docker', 'traffic', 'troubleshooting', 'contributing'].map((guide) => `docs/${guide}/`)]) {
     assert.ok(pages.has(`/${route}index.html`), `Missing page: /${route}`);
   }
   assert.ok(pages.has('/404.html'));
@@ -43,9 +44,39 @@ test('every internal link, fragment, and asset resolves in the static build', ()
   assert.ok(checked > 100, 'Expected navigation and table-of-contents links to be rendered');
 });
 
-test('the website ships no JavaScript and stays below a 256 KiB total asset budget', () => {
-  for (const [path, html] of pages) assert.doesNotMatch(html, /<script\b/i, path);
-  assert.ok(!files.some((file) => /\.(?:m?js)$/.test(file)));
+test('the static site stays below 1 MiB with less than 16 KiB of client JavaScript', () => {
+  const scripts = files.filter((file) => /\.(?:m?js)$/.test(file));
+  assert.ok(scripts.length > 0);
+  assert.ok(scripts.reduce((total, file) => total + statSync(resolve(dist, file)).size, 0) < 16 * 1024);
+  for (const [path, html] of pages) assert.doesNotMatch(html, /<script[^>]+src="https?:/i, path);
   const bytes = files.reduce((total, file) => total + statSync(resolve(dist, file)).size, 0);
-  assert.ok(bytes < 256 * 1024, `Static output is ${bytes} bytes`);
+  assert.ok(bytes < 1024 * 1024, `Static output is ${bytes} bytes`);
+});
+
+const index = JSON.parse(readFileSync(resolve(dist, 'search-index.json'), 'utf8'));
+
+test('search indexes every guide and all result links resolve to real sections', () => {
+  assert.ok(index.length > 35);
+  for (const entry of index) {
+    const [path, anchor] = entry.href.split('#');
+    const html = pages.get(`${path}index.html`);
+    assert.ok(html, entry.href);
+    if (anchor) assert.ok(html.includes(`id="${anchor}"`), entry.href);
+    assert.ok(entry.title && entry.text, entry.href);
+    assert.doesNotMatch(entry.text, /<\/?(?:span|p|code|h[1-6])\b/);
+  }
+  for (const path of pages.keys()) {
+    if (path.startsWith('/docs/')) assert.ok(index.some((entry) => `${entry.href}index.html` === path), path);
+  }
+});
+
+test('search ranks titles, matches body text and multiple terms, and handles empty results', () => {
+  assert.equal(searchEntries(index, 'workspace configuration')[0].href, '/docs/configuration/');
+  assert.ok(searchEntries(index, 'ConPTY').some((entry) => entry.href.includes('terminals')));
+  assert.ok(searchEntries(index, 'compose override').some((entry) => entry.href.startsWith('/docs/docker/')));
+  assert.equal(searchEntries(index, 'xyz-nonexistent').length, 0);
+  assert.equal(searchEntries(index, '<script>alert(1)</script>').length, 0);
+  assert.equal(searchEntries(index, '   ').length, 5);
+  assert.ok(searchEntries(index, 'DOCKER').length > 0);
+  assert.ok(excerpt('a'.repeat(200) + ' tmux is required', 'tmux').includes('tmux'));
 });
