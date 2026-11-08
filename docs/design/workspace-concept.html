@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="A DevOrbit workspace design preview for managing local services and inspecting Docker Compose.">
+<title>ff Workspace | DevOrbit</title>
+<style>
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: Console (deal 1/3) · nav: workspace rail and breadcrumb · signature: service register with commands in view · states: idle, running, filtered, Compose blocked · console: graphite with DevOrbit orange · axes: dark/grotesk-sans/chromatic-orange · posture: restrained · v2.0.0 */
+/* Hallmark · pre-emit critique: P4 H4 E4 S4 R5 V4 · weakest: S, status cards made the screen generic; put commands, branches and Compose recovery on the same work surface. */
+/* Hallmark · finish-review: in-thread · mobile service states aligned and workspace switcher marked. */
+:root {
+  color-scheme: dark;
+  --color-paper: #171a1e;
+  --color-paper-2: #1e2227;
+  --color-paper-3: #131518;
+  --color-rail: #1a1d21;
+  --color-hover: #292e34;
+  --color-ink: #eff0f2;
+  --color-ink-2: #d1d4d9;
+  --color-muted: #a5acb6;
+  --color-rule: #353b43;
+  --color-rule-2: #626a76;
+  --color-accent: #db612f;
+  --color-accent-ink: #1b100b;
+  --color-accent-hover: #ff9c72;
+  --color-accent-pressed: #ed7c50;
+  --color-accent-soft: #38271f;
+  --color-focus: #ffb28e;
+  --color-ok: #86d7ac;
+  --color-bad: #f4a49e;
+  --color-bad-soft: #272020;
+  --color-backdrop: #0d1015b8;
+  --color-clear: transparent;
+  --font-body: "DM Sans", system-ui, sans-serif;
+  --font-code: "JetBrains Mono", ui-monospace, monospace;
+  --radius-control: 5px;
+  --control: 36px;
+  --rail: 216px;
+  --gutter: clamp(24px, 3.65vw, 56px);
+  --container: 1256px;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html, body { overflow-x: clip; }
+html { scrollbar-color: var(--color-rule-2) var(--color-paper); }
+body { margin: 0; background: var(--color-paper); color: var(--color-ink); font-family: var(--font-body); font-size: 16px; line-height: 1.5; caret-color: var(--color-accent-hover); }
+::selection { background: var(--color-accent-soft); color: var(--color-ink); }
+:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 3px; }
+[hidden] { display: none !important; }
+h1, h2, h3 { margin: 0; font-weight: 600; line-height: 1.15; overflow-wrap: break-word; min-width: 0; text-wrap: balance; }
+h1 { font-size: 38px; letter-spacing: -0.045em; }
+h2 { font-size: 21px; letter-spacing: -0.025em; }
+h3 { font-size: 16px; }
+p { margin: 0; text-wrap: pretty; }
+button, input { font: inherit; }
+code { font-family: var(--font-code); font-size: 0.8125rem; font-variant-numeric: tabular-nums; }
+.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: clip; clip-path: inset(50%); white-space: nowrap; }
+.skip { position: absolute; z-index: 5; inset: 10px auto auto 10px; padding: 8px 12px; background: var(--color-paper-2); color: var(--color-ink); }
+.skip:not(:focus) { clip-path: inset(50%); }
+
+.shell { display: grid; grid-template-columns: var(--rail) minmax(0, 1fr); grid-template-rows: auto 1fr; min-height: 100dvh; }
+.brand, .topbar { min-height: 57px; border-bottom: 1px solid var(--color-rule); display: flex; align-items: center; background: var(--color-rail); }
+.brand { padding-inline: 24px; border-right: 1px solid var(--color-rule); gap: 12px; font-size: 19px; font-weight: 650; letter-spacing: -0.04em; }
+.orbit { position: relative; width: 21px; height: 21px; border: 1.8px solid var(--color-accent); border-radius: 50%; transform: rotate(-28deg); flex: none; }
+.orbit::before { content: ""; position: absolute; width: 28px; height: 11px; left: -5px; top: 3px; border: 1.6px solid var(--color-accent); border-radius: 50%; }
+.orbit::after { content: ""; position: absolute; right: -6px; top: -1px; width: 4px; height: 4px; border-radius: 50%; background: var(--color-accent-hover); }
+.topbar { justify-content: space-between; gap: 12px; padding-inline: 24px; min-width: 0; }
+.crumb, .preview-note { display: flex; align-items: center; gap: 8px; color: var(--color-muted); font-size: 13px; white-space: nowrap; }
+.crumb strong { color: var(--color-ink); font-weight: 600; }
+.crumb .icon { width: 13px; }
+.sidebar { display: flex; flex-direction: column; justify-content: space-between; gap: 32px; border-right: 1px solid var(--color-rule); background: var(--color-rail); padding-block: 20px 16px; }
+.rail-heading { display: flex; justify-content: space-between; align-items: center; padding: 0 12px 4px 24px; font-size: 13px; color: var(--color-muted); }
+.workspace-list { list-style: none; margin: 0; padding: 0; }
+.workspace-list a, .workspace-list button { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 44px; padding: 0 20px; border: 0; border-left: 2px solid var(--color-clear); background: var(--color-clear); color: var(--color-ink-2); font-size: 14px; text-decoration: none; text-align: left; white-space: nowrap; }
+.workspace-list a[aria-current] { border-left-color: var(--color-accent); background: var(--color-accent-soft); color: var(--color-accent-hover); font-weight: 600; }
+.workspace-list :focus-visible { outline-offset: -3px; }
+.preview-note { margin: 0 20px; padding-top: 12px; border-top: 1px solid var(--color-rule); }
+.preview-note .icon { width: 14px; }
+.mobile-nav { display: none; position: relative; }
+.mobile-nav summary .icon { width: 13px; transform: rotate(90deg); }
+.mobile-menu { position: absolute; z-index: 2; top: calc(100% + 8px); left: 0; min-width: 186px; background: var(--color-rail); border: 1px solid var(--color-rule-2); }
+
+main { min-width: 0; }
+.container { max-width: var(--container); margin-inline: auto; padding: 40px var(--gutter) 48px; }
+.workspace-heading, .section-heading, .controls { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.workspace-heading { align-items: flex-start; }
+.workspace-heading p { margin-top: 4px; color: var(--color-muted); }
+.workspace-actions, .run-actions, .section-tools, .row-actions { display: flex; align-items: center; gap: 8px; }
+.workspace-actions { padding-top: 4px; }
+.compose-file code, dialog code { overflow-wrap: anywhere; }
+.controls { margin-top: 24px; min-height: 66px; padding: 12px 12px 12px 16px; background: var(--color-paper-2); border-block: 1px solid var(--color-rule); }
+.workspace-status { display: flex; align-items: center; gap: 12px; font-size: 14px; }
+.workspace-status .status-text { font-weight: 600; }
+.run-count { padding-left: 12px; border-left: 1px solid var(--color-rule-2); color: var(--color-muted); white-space: nowrap; }
+.run-count b { font-weight: 650; color: var(--color-ink); font-variant-numeric: tabular-nums; }
+.controls-note { color: var(--color-muted); margin-top: 8px; text-align: right; font-size: 12px; }
+
+.btn { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: var(--control); padding: 0 12px; border: 1px solid var(--color-rule-2); border-radius: var(--radius-control); background: var(--color-paper-2); color: var(--color-ink-2); font-size: 13px; font-weight: 550; line-height: 1; white-space: nowrap; cursor: pointer; }
+.btn::after { content: ""; position: absolute; inset: -4px 0; }
+.btn.quiet { background: var(--color-clear); border-color: var(--color-clear); }
+.btn.primary { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-accent-ink); font-weight: 700; }
+.btn.icon-btn { width: 44px; padding: 0; }
+.btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.btn:active:not(:disabled), .workspace-list button:active, summary:active { background: var(--color-paper-3); }
+@media (hover: hover) {
+  .btn:hover:not(:disabled), .workspace-list button:hover { background: var(--color-hover); }
+  .btn.primary:hover:not(:disabled) { background: var(--color-accent-hover); }
+}
+.btn.primary:active:not(:disabled) { background: var(--color-accent-pressed); }
+@media (pointer: coarse) {
+  :root { --control: 44px; }
+  .workspace-list a, .workspace-list button { min-height: 48px; }
+}
+
+section + section { margin-top: 32px; }
+.services { margin-top: 32px; }
+.section-heading { margin-bottom: 12px; min-height: var(--control); }
+.search { display: flex; align-items: center; gap: 8px; min-height: var(--control); padding-inline: 8px; width: 182px; border: 1px solid var(--color-rule-2); border-radius: var(--radius-control); background: var(--color-paper-3); color: var(--color-muted); }
+.search input { min-width: 0; width: 100%; min-height: calc(var(--control) - 2px); padding: 0; border: 0; background: var(--color-clear); color: var(--color-ink); font-size: 13px; }
+.search input::placeholder { color: var(--color-muted); opacity: 1; }
+.search:has(:focus-visible) { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.search input:focus-visible { outline-offset: -2px; }
+.services table { width: 100%; border-collapse: collapse; text-align: left; }
+.services th { background: var(--color-paper-2); color: var(--color-muted); font-size: 13px; font-weight: 550; white-space: nowrap; }
+.services th, .services td { padding: 8px 16px; border-block: 1px solid var(--color-rule); }
+.services th:first-child { width: 32%; }
+.services th:nth-child(2) { width: 15%; }
+.services th:nth-child(3) { width: 8%; }
+.services th:nth-child(4) { width: 25%; }
+.services td { height: 73px; font-size: 14px; }
+.services td:last-child, .services th:last-child { padding-right: 8px; }
+.services th:last-child { text-align: right; padding-right: 20px; }
+.service-name { display: flex; gap: 12px; align-items: flex-start; min-width: 0; }
+.service-name > .icon { color: var(--color-muted); margin-top: 4px; }
+.service-name strong { display: block; font-size: 16px; font-weight: 650; }
+.branch { display: flex; gap: 4px; align-items: center; color: var(--color-muted); overflow-wrap: anywhere; }
+.branch .icon { width: 12px; }
+.branch code { font-size: 12px; }
+.service-status { display: flex; flex-direction: column; gap: 2px; }
+.status-text { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.status-text .icon { width: 14px; height: 14px; }
+.is-running { color: var(--color-ok); }
+.service-status small, .port, .command { color: var(--color-muted); }
+.command { color: var(--color-ink-2); overflow-wrap: anywhere; }
+.row-actions { justify-content: flex-end; gap: 1px; }
+.row-actions .btn { color: var(--color-ink-2); }
+.empty-search { padding: 24px 16px; color: var(--color-muted); border-bottom: 1px solid var(--color-rule); }
+
+.compose-title { display: flex; align-items: center; gap: 12px; }
+.compose-title .icon { width: 20px; height: 20px; color: var(--color-muted); }
+.compose-body { display: grid; grid-template-columns: minmax(0, 0.94fr) minmax(0, 1.06fr); border-block: 1px solid var(--color-rule); }
+.compose-file, .compose-error { padding: 16px 16px 16px; min-width: 0; }
+.compose-file { background: var(--color-paper-2); }
+.compose-file dl { margin: 0; }
+.compose-file dt { color: var(--color-muted); font-size: 13px; }
+.compose-file dd { margin: 4px 0 0; }
+.engine { display: flex; align-items: center; gap: 8px; margin-top: 16px; font-size: 13px; color: var(--color-ok); }
+.compose-count { margin-top: 4px; padding-left: 24px; color: var(--color-muted); font-size: 13px; }
+.compose-error { background: var(--color-bad-soft); border-left: 2px solid var(--color-bad); }
+.compose-error h3 { display: flex; align-items: center; gap: 8px; color: var(--color-bad); }
+.compose-error p { color: var(--color-ink-2); margin-top: 8px; font-size: 14px; max-width: 65ch; }
+.compose-error ul { margin: 8px 0; padding-left: 20px; }
+.compose-error details { margin-top: 8px; }
+.compose-error summary { display: list-item; width: fit-content; min-height: 36px; padding-block: 8px; color: var(--color-ink-2); font-size: 13px; cursor: pointer; }
+.compose-error pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+dialog { width: min(460px, calc(100% - 32px)); padding: 24px; border: 1px solid var(--color-rule-2); border-radius: var(--radius-control); background: var(--color-paper-2); color: var(--color-ink); }
+dialog::backdrop { background: var(--color-backdrop); }
+dialog p { margin: 12px 0 16px; color: var(--color-ink-2); }
+dialog form { display: flex; justify-content: flex-end; margin-top: 24px; }
+
+@media (max-width: 60rem) {
+  .shell { grid-template-columns: auto minmax(0, 1fr); }
+  .sidebar, .crumb { display: none; }
+  .mobile-nav { display: block; }
+  main { grid-column: 1 / -1; }
+  .container { padding-top: 28px; }
+}
+@media (max-width: 46rem) {
+  .workspace-heading { display: block; }
+  .workspace-actions { margin-top: 12px; flex-wrap: wrap; }
+  .controls { flex-wrap: wrap; padding-inline: 12px; gap: 12px; }
+  .controls-note { text-align: left; }
+  .compose-body { grid-template-columns: minmax(0, 1fr); }
+  .services thead { position: absolute; width: 1px; height: 1px; overflow: clip; clip-path: inset(50%); }
+  .services tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; padding: 12px 0; border-top: 1px solid var(--color-rule); }
+  .services tr:last-child { border-bottom: 1px solid var(--color-rule); }
+  .services td, .services td:last-child { border: 0; height: auto; padding: 0; }
+  .service-status { align-items: flex-end; }
+  .services .port { display: none; }
+  .services td:last-child { align-self: center; }
+  .search input { font-size: 16px; }
+}
+@media (max-width: 34rem) {
+  :root { --gutter: 16px; }
+  .brand, .topbar { padding-inline: 12px; }
+  .topbar { gap: 4px; }
+  .mobile-nav .btn { padding-inline: 4px; gap: 4px; }
+  .brand { font-size: 16px; gap: 8px; }
+  .orbit { scale: 0.85; }
+  .quick-label { display: none; }
+  .workspace-actions { gap: 2px; }
+  .workspace-actions .btn { padding-inline: 8px; }
+  .section-heading { flex-wrap: wrap; }
+  .section-tools { flex-wrap: wrap; }
+  .run-actions { gap: 4px; }
+  .run-actions .btn { padding-inline: 4px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+</style>
+</head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="0" height="0" style="position:absolute">
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m5 6 6 6-6 6m8 0h6"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-9zM13 3v7h7m-11 4-2 2 2 2m6-4 2 2-2 2"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="m15 5 4 4M4 20l4-.8L20 7a2.8 2.8 0 0 0-4-4L4.8 15z"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 4v5h-5m4.7 0A8 8 0 1 0 20 14"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 4.5 4.5"/></symbol>
+  <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="6" r="2"/><path d="M6 7v10m12-9a6 6 0 0 1-6 6H6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="m12 3 10 17H2zm0 6v4m0 3h.01"/></symbol>
+  <symbol id="i-compose" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5zm-9 9 9 5 9-5M3 16l9 5 9-5"/></symbol>
+  <symbol id="i-window" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="15" rx="2"/><path d="M3 8h18m-6 4h6v7h-6z"/></symbol>
+</svg>
+<a class="skip" href="#workspace">Skip to workspace</a>
+<div class="shell">
+  <div class="brand"><span class="orbit" aria-hidden="true"></span>DevOrbit</div>
+  <header class="topbar">
+    <div class="crumb">Workspaces <svg class="icon" aria-hidden="true"><use href="#i-next"/></svg> <strong>ff</strong></div>
+    <details class="mobile-nav">
+      <summary class="btn quiet">Workspaces: ff <svg class="icon" aria-hidden="true"><use href="#i-next"/></svg></summary>
+      <nav class="mobile-menu" aria-label="Workspaces">
+        <ul class="workspace-list">
+          <li><a href="#workspace" aria-current="page">ff</a></li>
+          <li><button type="button" data-preview="Tenancy">Tenancy</button></li>
+          <li><button type="button" data-preview="interhub">interhub</button></li>
+          <li><button type="button" data-preview="New workspace">New workspace</button></li>
+        </ul>
+      </nav>
+    </details>
+    <button type="button" class="btn quiet" data-preview="Quick controls" aria-label="Quick controls" title="Quick controls"><svg class="icon" aria-hidden="true"><use href="#i-window"/></svg><span class="quick-label">Quick controls</span></button>
+  </header>
+  <aside class="sidebar">
+    <nav aria-label="Workspaces">
+      <div class="rail-heading">Workspaces <button type="button" class="btn quiet icon-btn" data-preview="New workspace" aria-label="New workspace" title="New workspace"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></button></div>
+      <ul class="workspace-list">
+        <li><a href="#workspace" aria-current="page"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg>ff</a></li>
+        <li><button type="button" data-preview="Tenancy"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg>Tenancy</button></li>
+        <li><button type="button" data-preview="interhub"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg>interhub</button></li>
+      </ul>
+    </nav>
+    <div class="preview-note"><svg class="icon" aria-hidden="true"><use href="#i-window"/></svg>HTML preview</div>
+  </aside>
+  <main id="workspace" tabindex="-1">
+    <div class="container">
+      <div class="workspace-heading">
+        <div><h1>ff</h1><p>Local processes for this workspace</p></div>
+        <div class="workspace-actions">
+          <button type="button" class="btn quiet" data-preview="Terminals"><svg class="icon" aria-hidden="true"><use href="#i-terminal"/></svg>Terminals</button>
+          <button type="button" class="btn quiet" data-preview="Workspace YAML" data-path="/home/prasanna/.config/devorbit/workspaces/e335771e-561a-408c-9467-aac71d1de384/.devorbit/workspace.yaml"><svg class="icon" aria-hidden="true"><use href="#i-file"/></svg>Workspace YAML</button>
+          <button type="button" class="btn quiet" data-preview="Edit workspace"><svg class="icon" aria-hidden="true"><use href="#i-edit"/></svg>Edit workspace</button>
+        </div>
+      </div>
+      <div class="controls" role="group" aria-label="Workspace controls">
+        <div class="workspace-status" role="status">
+          <span class="status-text" id="workspace-status"><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg><span>Idle</span></span>
+          <span class="run-count"><b id="running-count">0</b> of <b id="service-count">2</b> running</span>
+        </div>
+        <div class="run-actions">
+          <button type="button" class="btn primary" data-run="start"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg>Start all</button>
+          <button type="button" class="btn" data-run="stop" disabled><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg>Stop all</button>
+          <button type="button" class="btn" data-run="restart" disabled><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Restart all</button>
+        </div>
+      </div>
+
+      <section class="services" aria-labelledby="services-title">
+        <div class="section-heading">
+          <h2 id="services-title">Services</h2>
+          <div class="section-tools">
+            <label class="search"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><input id="search" name="services" type="search" autocomplete="off" aria-label="Search services" placeholder="Search services"></label>
+            <button type="button" class="btn" data-preview="Add service"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>Add service</button>
+          </div>
+        </div>
+        <table aria-labelledby="services-title" role="table">
+          <thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Service</th><th scope="col" role="columnheader">Status</th><th scope="col" role="columnheader" title="Listening TCP port">Port</th><th scope="col" role="columnheader">Command</th><th scope="col" role="columnheader">Actions</th></tr></thead>
+          <tbody role="rowgroup">
+            <tr role="row" data-service="r">
+              <td role="cell"><div class="service-name"><svg class="icon" aria-hidden="true"><use href="#i-terminal"/></svg><div><strong>r</strong><span class="branch"><svg class="icon" aria-hidden="true"><use href="#i-branch"/></svg><code>integration/wp-printing-prasanna</code></span></div></div></td>
+              <td role="cell"><div class="service-status"><span class="status-text"><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg><span>Stopped</span></span><small>Enabled</small></div></td>
+              <td class="port" role="cell"><span aria-label="No listening port">−</span></td>
+              <td role="cell"><code class="command">flutter run -d linux</code></td>
+              <td role="cell"><div class="row-actions">
+                <button type="button" class="btn quiet icon-btn" data-run="toggle" aria-label="Start r" title="Start r"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg></button>
+                <button type="button" class="btn quiet icon-btn" data-run="restart" aria-label="Restart r" title="Restart r"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg></button>
+                <button type="button" class="btn quiet icon-btn" data-preview="r" aria-label="Details for r" title="Details for r"><svg class="icon" aria-hidden="true"><use href="#i-next"/></svg></button>
+              </div></td>
+            </tr>
+            <tr role="row" data-service="rms api">
+              <td role="cell"><div class="service-name"><svg class="icon" aria-hidden="true"><use href="#i-terminal"/></svg><div><strong>rms api</strong><span class="branch"><svg class="icon" aria-hidden="true"><use href="#i-branch"/></svg><code>integration/api-wp-prasanna</code></span></div></div></td>
+              <td role="cell"><div class="service-status"><span class="status-text"><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg><span>Stopped</span></span><small>Enabled</small></div></td>
+              <td class="port" role="cell"><span aria-label="No listening port">−</span></td>
+              <td role="cell"><code class="command">go run main.go</code></td>
+              <td role="cell"><div class="row-actions">
+                <button type="button" class="btn quiet icon-btn" data-run="toggle" aria-label="Start rms api" title="Start rms api"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg></button>
+                <button type="button" class="btn quiet icon-btn" data-run="restart" aria-label="Restart rms api" title="Restart rms api"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg></button>
+                <button type="button" class="btn quiet icon-btn" data-preview="rms api" aria-label="Details for rms api" title="Details for rms api"><svg class="icon" aria-hidden="true"><use href="#i-next"/></svg></button>
+              </div></td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="empty-search" role="status" hidden>No services match your search. Try a service name, branch or command.</p>
+      </section>
+
+      <section aria-labelledby="compose-title">
+        <div class="section-heading">
+          <div class="compose-title"><svg class="icon" aria-hidden="true"><use href="#i-compose"/></svg><h2 id="compose-title">Docker Compose</h2></div>
+          <button type="button" class="btn" data-preview="Refresh Compose"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Refresh</button>
+        </div>
+        <div class="compose-body">
+          <div class="compose-file">
+            <dl><dt>Compose file</dt><dd><code>/home/prasanna/Projects/rms_api/docker-compose.yaml</code></dd></dl>
+            <p class="engine"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg>Compose and Docker Engine are ready.</p>
+            <p class="compose-count">0 services loaded</p>
+          </div>
+          <div class="compose-error">
+            <h3><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>Compose configuration is incomplete</h3>
+            <p>Set the required value in the Compose environment, then refresh.</p>
+            <ul><li><code>MINIO_ROOT_PASSWORD</code></li></ul>
+            <details><summary>Technical details</summary><pre><code>Required variable MINIO_ROOT_PASSWORD is missing a value.</code></pre></details>
+          </div>
+        </div>
+      </section>
+      <noscript><p class="controls-note">Enable JavaScript to try the preview controls.</p></noscript>
+    </div>
+  </main>
+</div>
+<dialog id="preview" aria-labelledby="preview-title">
+  <h2 id="preview-title">Workspace preview</h2>
+  <p id="preview-copy"></p>
+  <code id="preview-code" hidden></code>
+  <form method="dialog"><button class="btn" type="submit">Close</button></form>
+</dialog>
+<script>
+  const rows = [...document.querySelectorAll('[data-service]')];
+  const dialog = document.querySelector('#preview');
+  const search = document.querySelector('#search');
+  const workspaceStatus = document.querySelector('#workspace-status');
+  const setIcon = (element, icon) => element.querySelector('use').setAttribute('href', `#i-${icon}`);
+  function renderRunState() {
+    const running = rows.filter(row => row.dataset.state === 'running').length;
+    const restarting = rows.some(row => row.dataset.state === 'restarting');
+    document.querySelector('#running-count').textContent = running;
+    document.querySelector('#service-count').textContent = rows.length;
+    workspaceStatus.querySelector('span').textContent = restarting ? 'Restarting' : !running ? 'Idle' : running === rows.length ? 'Running' : 'Partially running';
+    workspaceStatus.classList.toggle('is-running', running > 0 && !restarting);
+    setIcon(workspaceStatus, restarting ? 'refresh' : running ? 'play' : 'stop');
+    document.querySelector('.controls [data-run="stop"]').disabled = !running && !restarting;
+    document.querySelector('.controls [data-run="restart"]').disabled = !running || restarting;
+    for (const row of rows) {
+      const state = row.dataset.state || 'stopped';
+      const active = state !== 'stopped';
+      const status = row.querySelector('.status-text');
+      const toggle = row.querySelector('[data-run="toggle"]');
+      status.querySelector('span').textContent = state[0].toUpperCase() + state.slice(1);
+      status.classList.toggle('is-running', state === 'running');
+      setIcon(status, state === 'running' ? 'play' : active ? 'refresh' : 'stop');
+      setIcon(toggle, active ? 'stop' : 'play');
+      toggle.title = `${active ? 'Stop' : 'Start'} ${row.dataset.service}`;
+      toggle.setAttribute('aria-label', toggle.title);
+    }
+  }
+  search.addEventListener('input', () => {
+    const query = search.value.trim().toLowerCase();
+    for (const row of rows) {
+      const haystack = `${row.dataset.service} ${row.querySelector('.branch').textContent} ${row.querySelector('.command').textContent}`;
+      row.hidden = !haystack.toLowerCase().includes(query);
+    }
+    document.querySelector('.empty-search').hidden = rows.some(row => !row.hidden);
+  });
+  document.addEventListener('click', event => {
+    const button = event.target.closest('button');
+    if (!button || button.disabled) return;
+    const row = button.closest('[data-service]');
+    const run = button.dataset.run;
+    if (run) {
+      // shortcut: local state only; connect DevOrbit operations if this becomes the desktop view.
+      for (const target of row ? [row] : rows) {
+        const wasActive = target.dataset.state && target.dataset.state !== 'stopped';
+        clearTimeout(target.restartTimer);
+        target.dataset.state = run === 'stop' || (run === 'toggle' && wasActive) ? 'stopped' : run === 'restart' ? 'restarting' : 'running';
+        if (run === 'restart') target.restartTimer = setTimeout(() => {
+          target.dataset.state = 'running';
+          renderRunState();
+        }, 500);
+      }
+      renderRunState();
+      if (button.disabled) document.querySelector('.controls [data-run="start"]').focus();
+    }
+    if (button.dataset.preview) {
+      const title = button.dataset.preview;
+      const path = button.dataset.path;
+      const code = path ?? row?.querySelector('.command').textContent;
+      dialog.querySelector('h2').textContent = title;
+      dialog.querySelector('p').textContent = row ? 'Command configured for this service. Live logs and settings open in DevOrbit.' : path ? 'Configuration path for this workspace. Open DevOrbit to view the file.' : title === 'Refresh Compose' ? 'This preview shows the captured Compose result. Open DevOrbit to check the current configuration.' : 'This control opens a separate view in DevOrbit. This HTML preview covers the ff workspace overview.';
+      dialog.querySelector('code').textContent = code ?? '';
+      dialog.querySelector('code').hidden = !code;
+      dialog.showModal();
+    }
+  });
+  document.querySelector('.mobile-nav a').addEventListener('click', () => {
+    document.querySelector('.mobile-nav').open = false;
+  });
+</script>
+</body>
+</html>
