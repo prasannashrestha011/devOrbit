@@ -67,7 +67,21 @@ export default function TerminalPane({ service, status, shell, docker, workspace
         import("@xterm/xterm"), import("@xterm/addon-fit"), import("@xterm/addon-search"), import("@xterm/addon-canvas"),
       ]);
       if (disposed || !host.current) return;
-      instance = new Terminal({ scrollback: 1000, convertEol: false, screenReaderMode: true, cursorBlink: true, fontSize: 14, fontFamily: fontFamilyRef.current ? `${JSON.stringify(fontFamilyRef.current)}, monospace` : "monospace", theme: { background: "#080b10", foreground: "#dbe5f2", cursor: "#58d6c0" } });
+      const styles = getComputedStyle(host.current);
+      instance = new Terminal({
+        scrollback: 1000,
+        convertEol: false,
+        screenReaderMode: true,
+        cursorBlink: true,
+        fontSize: 14,
+        fontFamily: fontFamilyRef.current ? `${JSON.stringify(fontFamilyRef.current)}, monospace` : "monospace",
+        theme: {
+          background: styles.getPropertyValue("--surface-terminal").trim(),
+          foreground: styles.getPropertyValue("--text-main").trim(),
+          cursor: styles.getPropertyValue("--focus-ring").trim(),
+          selectionBackground: styles.getPropertyValue("--accent-soft").trim(),
+        },
+      });
       const fit = new FitAddon();
       const finder = new SearchAddon();
       instance.loadAddon(fit);
