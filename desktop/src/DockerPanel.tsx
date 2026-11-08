@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Box, ChevronDown, FileCode2, FileText, Hammer, MoreHorizontal, Play, RefreshCw, RotateCw, Square, Trash2 } from "lucide-react";
+import { Box, Check, ChevronDown, FileText, Hammer, Layers, MoreHorizontal, Play, RefreshCw, RotateCw, Square, Trash2, TriangleAlert } from "lucide-react";
 import { api, type DockerAction, type DockerOperation, type DockerSnapshot } from "./api";
 import DockerError from "./DockerError";
 import DockerServiceDetails, { type DockerServiceTab } from "./DockerServiceDetails";
@@ -96,44 +96,50 @@ export default function DockerPanel({ workspaceId }: { workspaceId: string }) {
   return <section className="docker-panel" aria-label="Docker Compose">
     <div className="docker-heading">
       <div className="docker-heading-copy">
-        <span ><img src={new URL("../src-tauri/icons/docker.svg", import.meta.url).href} width={64} height={64} alt="" /></span>
-        <div><span className="eyebrow">DOCKER COMPOSE</span><h2>Docker services <span className="count-pill">{project?.services.length ?? 0}</span></h2><p>Manage the Compose services connected to this workspace.</p></div>
+        <Layers size={20} aria-hidden="true" />
+        <h2>Docker Compose</h2>
       </div>
-      <button className="button subtle" disabled={busy || loading} onClick={() => { setLoading(true); refresh().catch((problem) => setError(message(problem))).finally(() => setLoading(false)); }}><RefreshCw size={16} aria-hidden="true" /> Refresh</button>
+      <button className="button" disabled={busy || loading} onClick={() => { setLoading(true); refresh().catch((problem) => setError(message(problem))).finally(() => setLoading(false)); }}><RefreshCw size={16} aria-hidden="true" /> Refresh</button>
     </div>
     {loading && !snapshot && <p className="docker-muted">Checking Compose configuration…</p>}
     {snapshot && <>
-      <div className="docker-project-card">
-        <div className="docker-project-info">
-          {project && <>
-            <div className="docker-project-title"><strong>{project.name}</strong><span>{project.services.length} services</span></div>
-            <div className="docker-project-stats">
-              {statusReady ? <><span><strong>{project.created}</strong> created</span><span><strong>{project.running}</strong> running</span><span><strong>{project.stopped}</strong> stopped</span></> : <span>Status unavailable</span>}
+      <div className={`docker-project-summary${snapshot.error ? " has-error" : ""}`}>
+        <div className="docker-project-card">
+          <div className="docker-project-info">
+            {project && <>
+              <div className="docker-project-title"><strong>{project.name}</strong><span>{project.services.length} services</span></div>
+              <div className="docker-project-stats">
+                {statusReady ? <><span><strong>{project.created}</strong> created</span><span><strong>{project.running}</strong> running</span><span><strong>{project.stopped}</strong> stopped</span></> : <span>Status unavailable</span>}
+              </div>
+            </>}
+            <div className="docker-file">
+              <div><span className="docker-file-label">Compose file</span>
+                {snapshot.candidates.length > 1 ? <select className="docker-select" aria-label="Compose file" value={file} onChange={(event) => choose(event.target.value)} disabled={busy}>
+                  <option value="">Select a configuration</option>
+                  {snapshot.candidates.map((item) => <option key={item.file} value={item.file}>{item.files.join(" + ")}</option>)}
+                </select> : <span title={snapshot.candidates[0]?.files.join(" + ")}>{snapshot.candidates[0]?.files.join(" + ")}</span>}
+              </div>
             </div>
-          </>}
-          <div className="docker-file"><FileCode2 size={17} aria-hidden="true" />
-            <div><span className="docker-file-label">Compose file</span>
-              {snapshot.candidates.length > 1 ? <select className="docker-select" aria-label="Compose file" value={file} onChange={(event) => choose(event.target.value)} disabled={busy}>
-                <option value="">Select a configuration</option>
-                {snapshot.candidates.map((item) => <option key={item.file} value={item.file}>{item.files.join(" + ")}</option>)}
-              </select> : <span title={snapshot.candidates[0]?.files.join(" + ")}>{snapshot.candidates[0]?.files.join(" + ")}</span>}
-            </div>
+            <p className={`docker-availability ${snapshot.availability.state === "ready" ? "ready" : ""}`}>
+              {snapshot.availability.state === "ready" ? <Check size={16} aria-hidden="true" /> : <TriangleAlert size={16} aria-hidden="true" />}
+              {snapshot.availability.message}
+            </p>
+            {!project && snapshot.error && <p className="docker-load-count">0 services loaded</p>}
+            {project && !statusReady && <span className="docker-muted">Container status unavailable</span>}
           </div>
-          <p className={`docker-availability ${snapshot.availability.state === "ready" ? "ready" : ""}`}><span className="docker-dot" />{snapshot.availability.message}</p>
-          {project && !statusReady && <span className="docker-muted">Container status unavailable</span>}
+          {project && <div className="docker-project-controls"><div className="docker-actions">
+            <button className="button primary" disabled={actionsDisabled} onClick={() => run("up")} title="Create or recreate containers; may build images"><Play size={15} aria-hidden="true" /> Up</button>
+            <button className="button" disabled={actionsDisabled || !projectActive} onClick={() => run("stop")}><Square size={15} aria-hidden="true" /> Stop</button>
+            <details className="docker-menu" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.removeAttribute("open"); }}><summary className="button" aria-label="More project actions" title="More project actions"><MoreHorizontal size={18} aria-hidden="true" /></summary><div className="docker-menu-list">
+              <button disabled={actionsDisabled || !projectStartable} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void run("start"); }}><Play size={15} aria-hidden="true" /> Start stopped</button>
+              <button disabled={actionsDisabled || project.running === 0} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void run("restart"); }}><RotateCw size={15} aria-hidden="true" /> Restart</button>
+              <button disabled={actionsDisabled || !project.services.some((item) => item.build)} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void run("build"); }}><Hammer size={15} aria-hidden="true" /> Build images</button>
+              <button className="danger" disabled={actionsDisabled || project.created === 0} title="Remove containers and networks; keep volumes" onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void run("down"); }}><Trash2 size={15} aria-hidden="true" /> Down…</button>
+            </div></details>
+          </div></div>}
         </div>
-        {project && <div className="docker-project-controls"><div className="docker-actions">
-          <button className="button primary" disabled={actionsDisabled} onClick={() => run("up")} title="Create or recreate containers; may build images"><Play size={15} aria-hidden="true" /> Up</button>
-          <button className="button" disabled={actionsDisabled || !projectActive} onClick={() => run("stop")}><Square size={15} aria-hidden="true" /> Stop</button>
-          <details className="docker-menu" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.removeAttribute("open"); }}><summary className="button" aria-label="More project actions" title="More project actions"><MoreHorizontal size={18} aria-hidden="true" /></summary><div className="docker-menu-list">
-            <button disabled={actionsDisabled || !projectStartable} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void run("start"); }}><Play size={15} aria-hidden="true" /> Start stopped</button>
-            <button disabled={actionsDisabled || project.running === 0} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void run("restart"); }}><RotateCw size={15} aria-hidden="true" /> Restart</button>
-            <button disabled={actionsDisabled || !project.services.some((item) => item.build)} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void run("build"); }}><Hammer size={15} aria-hidden="true" /> Build images</button>
-            <button className="danger" disabled={actionsDisabled || project.created === 0} title="Remove containers and networks; keep volumes" onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void run("down"); }}><Trash2 size={15} aria-hidden="true" /> Down…</button>
-          </div></details>
-        </div></div>}
+        {snapshot.error && <DockerError error={snapshot.error} title="Could not load Compose services" />}
       </div>
-      {snapshot.error && <DockerError error={snapshot.error} title="Could not load Compose services" />}
       {project && <div className="docker-services">
         <div className="docker-services-heading"><h3><button type="button" className="docker-services-toggle" aria-expanded={servicesExpanded} onClick={() => setServicesExpanded((expanded) => !expanded)}>Compose services <ChevronDown size={16} aria-hidden="true" /></button></h3><span>{project.services.length} defined in {project.name}</span></div>
         {servicesExpanded && project.services.map((service) => {
