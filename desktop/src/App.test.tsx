@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 
 const invoke = vi.hoisted(() => vi.fn());
@@ -202,7 +203,7 @@ it("lists detected Docker services in the workspace overview when the Engine is 
   render(<App />);
   const section = await screen.findByRole("region", { name: "Docker Compose" });
   await waitFor(() => expect(section.textContent).toContain("postgres"));
-  expect(section.querySelector("h2")?.textContent).toContain("Docker services");
+  expect(within(section).getByRole("heading", { name: "Docker Compose", level: 2 })).toBeTruthy();
   expect(section.textContent).toContain("postgres:16");
   expect(section.textContent).toContain("Container status unavailable");
   expect(section.textContent).not.toContain("Defined · no container");
@@ -336,7 +337,7 @@ it("shows detected listening ports only for running services in the overview", a
   expect(await screen.findByText(":8080")).toBeTruthy();
   expect(screen.getByText(":9090")).toBeTruthy();
   expect(screen.queryByText(":3000")).toBeNull();
-  expect(screen.getByText("PORT").getAttribute("title")).toContain("Listening TCP ports");
+  expect(screen.getByRole("columnheader", { name: "Port" }).getAttribute("title")).toContain("Listening TCP ports");
 });
 
 it("offers detected listening ports for local HTTP inspection only while running", async () => {

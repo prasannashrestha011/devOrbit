@@ -10,13 +10,11 @@ import { listen } from "@tauri-apps/api/event";
 import { homeDir } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
-  Activity,
   ChevronLeft,
   ChevronRight,
   FileCode2,
   Folder,
   GitBranch as GitBranchIcon,
-  LayoutGrid,
   List,
   Pencil,
   Play,
@@ -28,6 +26,7 @@ import {
   Square,
   Terminal,
   Trash2,
+  TriangleAlert,
 } from "lucide-react";
 import { formatCommandLine, parseCommandLine } from "./commandLine";
 import {
@@ -53,7 +52,6 @@ type Dialog =
 type Notice = { workspace_id: string; type?: string };
 
 const icons = {
-  grid: LayoutGrid,
   folder: Folder,
   plus: Plus,
   play: Play,
@@ -67,9 +65,9 @@ const icons = {
   arrow: ChevronRight,
   back: ChevronLeft,
   search: Search,
-  pulse: Activity,
   terminal: Terminal,
   floating: PictureInPicture2,
+  alert: TriangleAlert,
 };
 
 function Icon({ name, size = 18 }: { name: keyof typeof icons; size?: number }) {
@@ -81,11 +79,12 @@ function GitBranch({ branch }: { branch: string }) {
   return branch ? <span className="git-branch" title={branch}><GitBranchIcon size={14} strokeWidth={1.8} aria-hidden="true" /><span>{branch}</span></span> : null;
 }
 
-function StateBadge({ state }: { state: string }) {
+function StateBadge({ state, flat = false }: { state: string; flat?: boolean }) {
+  const icon = state === "running" || state === "partial" ? "play" : state === "failed" ? "alert" : ["starting", "stopping", "transitioning"].includes(state) ? "restart" : "stop";
   return (
-    <span className={`state state-${state}`}>
-      <span className="state-dot" />
-      {state.replace("_", " ")}
+    <span className={`state state-${state}${flat ? " state-flat" : ""}`}>
+      {flat ? <Icon name={icon} size={14} /> : <span className="state-dot" aria-hidden="true" />}
+      {flat && state === "partial" ? "Partially running" : state.replace("_", " ")}
     </span>
   );
 }
@@ -356,8 +355,9 @@ function ServiceForm({
   );
 }
 
-function ConfigurationEditor({ workspaceId, initial, onSaved, onClose }: {
+function ConfigurationEditor({ workspaceId, rootPath, initial, onSaved, onClose }: {
   workspaceId: string;
+  rootPath: string;
   initial: WorkspaceConfiguration;
   onSaved: () => Promise<void>;
   onClose: () => void;
@@ -381,7 +381,8 @@ function ConfigurationEditor({ workspaceId, initial, onSaved, onClose }: {
   }
   return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="dialog configuration-dialog" role="dialog" aria-modal="true" aria-labelledby="configuration-dialog-title">
-      <div className="dialog-title"><div><span className="eyebrow">WORKSPACE CONFIGURATION</span><h2 id="configuration-dialog-title">.devorbit/workspace.yaml</h2></div><button className="icon-button" onClick={onClose} aria-label="Close">×</button></div>
+      <div className="dialog-title"><h2 id="configuration-dialog-title">Workspace YAML</h2><button className="icon-button" onClick={onClose} aria-label="Close">×</button></div>
+      <p className="configuration-path"><code>{rootPath.replace(/\/$/, "")}/.devorbit/workspace.yaml</code></p>
       <p className="hint">Save updates service definitions. Running processes keep their current configuration until you restart them.</p>
       <label htmlFor="configuration-file">Import YAML into editor</label>
       <input id="configuration-file" type="file" accept=".yaml,.yml,text/yaml" onChange={async (event) => {
@@ -698,9 +699,12 @@ export default function App() {
   const activeTerminalService = services.find((item) => item.id === focusedTerminalId);
   const activeTerminalStatus = status?.services.find((item) => item.service_id === focusedTerminalId);
   const activeShell = shellSessions.find((item) => item.id === focusedTerminalId);
-  const filteredServices = services.filter((item) =>
-    item.name.toLowerCase().includes(search.toLowerCase()),
-  );
+  const serviceQuery = search.trim().toLowerCase();
+  const filteredServices = serviceQuery ? services.filter((item) =>
+    item.name.toLowerCase().includes(serviceQuery) ||
+    item.git_branch?.toLowerCase().includes(serviceQuery) ||
+    formatCommandLine([item.command, ...item.args]).toLowerCase().includes(serviceQuery),
+  ) : services;
 
   async function runAction(key: string, action: () => Promise<void>) {
     setBusy(key);
@@ -857,7 +861,7 @@ export default function App() {
             </span>
           </div>
           <div className="side-section-title">
-            YOUR WORKSPACES{" "}
+            Workspaces
             <button
               className="icon-button"
               onClick={() => setDialog({ kind: "workspace" })}
@@ -873,11 +877,11 @@ export default function App() {
                 key={item.id}
                 className={`workspace-nav-item ${item.id === selectedId ? "active" : ""}`}
                 onClick={() => setSelectedId(item.id)}
+                aria-current={item.id === selectedId ? "true" : undefined}
                 title={item.name}
               >
                 <Icon name="folder" size={18} />
                 <span>{item.name}</span>
-                {item.id === selectedId && <span className="nav-dot" />}
               </button>
             ))}
             {!loading && workspaces.length === 0 && (
@@ -900,7 +904,6 @@ export default function App() {
                 </small>
               </div>
             </div>
-            <div className="sidebar-version">DEVORBIT / DESKTOP</div>
             <button type="button" className="sidebar-settings-button" aria-label="Settings" aria-controls="app-settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((open) => !open)}>
               <Icon name="settings" size={18} /><span>Settings</span>
             </button>
@@ -942,7 +945,7 @@ export default function App() {
               <Icon name="floating" size={17} /> Quick controls
             </button>
           </header>
-          <div className="content">
+          <div className={`content${workspace && workspaceView === "overview" && !selectedService ? " workspace-overview" : ""}`}>
             {error && (
               <div className="error-banner" role="alert">
                 <span>{error}</span>
@@ -976,12 +979,7 @@ export default function App() {
                     <span />
                   </span>
                 </div>
-                <span className="eyebrow">YOUR LOCAL CONTROL CENTER</span>
-                <h1>
-                  Give your projects
-                  <br />
-                  room to run.
-                </h1>
+                <h1>No workspaces yet</h1>
                 <p>
                   Create a workspace for a project directory, then add the
                   processes you want to manage.
@@ -1138,7 +1136,6 @@ export default function App() {
               <>
                 <div className="overview-head">
                   <div>
-                    <span className="eyebrow">WORKSPACE OVERVIEW</span>
                     <h1>{workspace.name}</h1>
                     <p>
                       {workspace.description ||
@@ -1146,84 +1143,53 @@ export default function App() {
                     </p>
                   </div>
                   <div className="overview-head-actions">
-                    <button className="button primary" onClick={() => setWorkspaceView("terminals")}><Icon name="terminal" size={17} /> Terminals</button>
-                    <button className="button subtle" onClick={() => setDialog({ kind: "configuration" })}><Icon name="file" size={17} /> Workspace YAML</button>
+                    <button className="button subtle" onClick={() => setWorkspaceView("terminals")}><Icon name="terminal" size={17} /> Terminals</button>
+                    <button className="button subtle" disabled={workspaceLoading || !configuration} onClick={() => setDialog({ kind: "configuration" })}><Icon name="file" size={17} /> Workspace YAML</button>
                     <button className="button subtle" onClick={() => setDialog({ kind: "workspace", item: workspace })}><Icon name="edit" size={17} /> Edit workspace</button>
                   </div>
                 </div>
-                <div className="root-path">
-                  <Icon name="folder" size={16} />
-                  <span title={`${workspace.root_path}/.devorbit/workspace.yaml`}>{workspace.root_path}/.devorbit/workspace.yaml</span>
-                </div>
-                <div className="overview-cards">
-                  <div className="summary-card">
-                    <div className="summary-icon blue">
-                      <Icon name="grid" size={22} />
-                    </div>
-                    <div>
-                      <small>TOTAL SERVICES</small>
-                      <strong>
-                        {status?.total_services ?? services.length}
-                      </strong>
-                    </div>
+                <div className="workspace-controls" role="group" aria-label="Workspace controls">
+                  <div className="workspace-status" role="status">
+                    <StateBadge state={status?.aggregate_state ?? "idle"} flat />
+                    <span className="workspace-run-count">
+                      <strong>{status?.running_services ?? "—"}</strong> of <strong>{status?.total_services ?? services.length}</strong> running
+                    </span>
                   </div>
-                  <div className="summary-card">
-                    <div className="summary-icon green">
-                      <Icon name="pulse" size={22} />
-                    </div>
-                    <div>
-                      <small>RUNNING</small>
-                      <strong>{status?.running_services ?? "—"}</strong>
-                    </div>
-                  </div>
-                  <div className="summary-card">
-                    <div className="summary-icon amber">
-                      <Icon name="stop" size={21} />
-                    </div>
-                    <div>
-                      <small>WORKSPACE STATE</small>
-                      <div className="card-state">
-                        <StateBadge state={status?.aggregate_state ?? "idle"} />
-                      </div>
-                    </div>
+                  <div className="action-row">
+                    <button
+                      className="button primary"
+                      disabled={
+                        !!busy || workspaceLoading || services.length === 0
+                      }
+                      onClick={() => workspaceAction("start")}
+                    >
+                      <Icon name="play" size={18} />
+                      {busy === "workspace-start" ? "Starting…" : "Start all"}
+                    </button>
+                    <button
+                      className="button"
+                      disabled={
+                        !!busy || workspaceLoading || (status !== null && status.running_services === 0 && status.starting_services === 0 && status.stopping_services === 0)
+                      }
+                      onClick={() => workspaceAction("stop")}
+                    >
+                      <Icon name="stop" size={18} />
+                      {busy === "workspace-stop" ? "Stopping…" : "Stop all"}
+                    </button>
+                    <button
+                      className="button"
+                      disabled={
+                        !!busy || workspaceLoading || services.length === 0 ||
+                        (status !== null && status.running_services === 0 && status.starting_services === 0 && status.stopping_services === 0)
+                      }
+                      onClick={() => workspaceAction("restart")}
+                    >
+                      <Icon name="restart" size={18} />
+                      {busy === "workspace-restart" ? "Restarting…" : "Restart all"}
+                    </button>
                   </div>
                 </div>
-                <div className="action-row">
-                  <button
-                    className="button primary"
-                    disabled={
-                      !!busy || workspaceLoading || services.length === 0
-                    }
-                    onClick={() => workspaceAction("start")}
-                  >
-                    <Icon name="play" size={18} />
-                    {busy === "workspace-start" ? "Starting…" : "Start all"}
-                  </button>
-                  <button
-                    className="button"
-                    disabled={
-                      !!busy || workspaceLoading || (status !== null && status.running_services === 0 && status.starting_services === 0 && status.stopping_services === 0)
-                    }
-                    onClick={() => workspaceAction("stop")}
-                  >
-                    <Icon name="stop" size={18} />
-                    {busy === "workspace-stop" ? "Stopping…" : "Stop all"}
-                  </button>
-                  <button
-                    className="button outline"
-                    disabled={
-                      !!busy || workspaceLoading || services.length === 0 ||
-                      (status !== null && status.running_services === 0 && status.starting_services === 0 && status.stopping_services === 0)
-                    }
-                    onClick={() => workspaceAction("restart")}
-                  >
-                    <Icon name="restart" size={18} />
-                    {busy === "workspace-restart" ? "Restarting…" : "Restart all"}
-                  </button>
-                  <span className="action-hint">
-                    Running means launched, not necessarily ready.
-                  </span>
-                </div>
+                <p className="action-hint">Running means launched, not necessarily ready.</p>
                 {result && (
                   <div className="operation-result" role="status">
                     <div className="result-heading">
@@ -1267,34 +1233,24 @@ export default function App() {
                     </div>
                   </div>
                 )}
-                <div className="section-header">
-                  <div>
-                    <h2>
-                      Services{" "}
-                      <span className="count-pill">{services.length}</span>
-                    </h2>
-                  </div>
-                  <button
-                    className="button"
-                    onClick={() => setDialog({ kind: "service" })}
-                  >
-                    <Icon name="plus" size={17} /> Add service
-                  </button>
-                </div>
-                <div className="service-panel">
-                  <div className="service-panel-toolbar">
-                    <div className="service-label">
-                      <span className="panel-marker" /> Managed services
+                <section className="services-section" aria-labelledby="services-heading">
+                  <div className="section-header">
+                    <h2 id="services-heading">Services</h2>
+                    <div className="section-tools">
+                      <label className="search-box">
+                        <Icon name="search" size={16} />
+                        <input
+                          type="search"
+                          aria-label="Search services"
+                          value={search}
+                          onChange={(event) => setSearch(event.target.value)}
+                          placeholder="Search services"
+                        />
+                      </label>
+                      <button className="button" onClick={() => setDialog({ kind: "service" })}>
+                        <Icon name="plus" size={16} /> Add service
+                      </button>
                     </div>
-                    <label className="search-box">
-                      <Icon name="search" size={16} />
-                      <input
-                        aria-label="Search services"
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        placeholder="Search services"
-                      />
-                    </label>
                   </div>
                   {workspaceLoading ? (
                     <div className="table-empty">Loading services…</div>
@@ -1313,101 +1269,85 @@ export default function App() {
                       </button>
                     </div>
                   ) : filteredServices.length === 0 ? (
-                    <div className="table-empty">
-                      No services match “{search}”.
-                    </div>
+                    <div className="table-empty" role="status">No services match “{search}”.</div>
                   ) : (
-                    <>
-                      <div className="service-table-head">
-                        <span>SERVICE</span>
-                        <span>STATUS</span>
-                        <span title="Listening TCP ports detected from the service process and its children">PORT</span>
-                        <span>COMMAND</span>
-                        <span>ACTIONS</span>
-                      </div>
-                      {filteredServices.map((item) => {
-                        const current = status?.services.find(
-                          (value) => value.service_id === item.id,
-                        );
-                        const commandLine = formatCommandLine([item.command, ...item.args]);
-                        const active =
-                          current?.state === "running" ||
-                          current?.state === "starting";
-                        return (
-                          <div className="service-row" key={item.id}>
-                            <button
-                              className="service-name"
-                              onClick={() => setSelectedServiceId(item.id)}
-                            >
-                              <span className="service-icon">
-                                <Icon name="terminal" size={19} />
-                              </span>
-                              <span className="service-name-copy">
-                                <span className="service-name-line"><strong>{item.name}</strong><GitBranch branch={item.git_branch} /></span>
-                                <small>{item.enabled ? "Enabled" : "Disabled"}</small>
-                              </span>
-                            </button>
-                            <div>
-                              <StateBadge state={current?.state ?? "stopped"} />
-                            </div>
-                            <div className="service-ports">
-                              {current?.state === "running" && current.listening_ports?.length
-                                ? current.listening_ports.map((port) => (
-                                    <span key={port}>:{port}</span>
-                                  ))
-                                : <span className="port-empty">—</span>}
-                            </div>
-                            <code title={commandLine}>{commandLine}</code>
-                            <div className="row-actions">
-                              {active ? (
+                    <table className="service-table" aria-labelledby="services-heading">
+                      <thead>
+                        <tr>
+                          <th scope="col">Service</th>
+                          <th scope="col">Status</th>
+                          <th scope="col" title="Listening TCP ports detected from the service process and its children">Port</th>
+                          <th scope="col">Command</th>
+                          <th scope="col">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredServices.map((item) => {
+                          const current = status?.services.find((value) => value.service_id === item.id);
+                          const commandLine = formatCommandLine([item.command, ...item.args]);
+                          const active = current?.state === "running" || current?.state === "starting";
+                          const enabled = item.enabled ? "Enabled" : "Disabled";
+                          return (
+                            <tr className="service-row" key={item.id}>
+                              <td>
                                 <button
-                                  className="icon-button"
-                                  title="Stop"
-                                  aria-label={`Stop ${item.name}`}
-                                  disabled={!!busy}
-                                  onClick={() => serviceAction(item.id, "stop")}
+                                  className="service-name"
+                                  aria-label={[item.name, item.git_branch, enabled].filter(Boolean).join(" ")}
+                                  onClick={() => setSelectedServiceId(item.id)}
                                 >
-                                  <Icon name="stop" size={17} />
+                                  <Icon name="terminal" size={16} />
+                                  <span className="service-name-line"><strong>{item.name}</strong><GitBranch branch={item.git_branch} /></span>
                                 </button>
-                              ) : (
-                                <button
-                                  className="icon-button"
-                                  title="Start"
-                                  aria-label={`Start ${item.name}`}
-                                  disabled={!!busy || !item.enabled}
-                                  onClick={() =>
-                                    serviceAction(item.id, "start")
-                                  }
-                                >
-                                  <Icon name="play" size={17} />
-                                </button>
-                              )}
-                              <button
-                                className="icon-button"
-                                title="Restart"
-                                aria-label={`Restart ${item.name}`}
-                                disabled={!!busy || !item.enabled}
-                                onClick={() =>
-                                  serviceAction(item.id, "restart")
-                                }
-                              >
-                                <Icon name="restart" size={17} />
-                              </button>
-                              <button
-                                className="icon-button"
-                                title="Open details"
-                                aria-label={`Open ${item.name}`}
-                                onClick={() => setSelectedServiceId(item.id)}
-                              >
-                                <Icon name="arrow" size={17} />
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </>
+                              </td>
+                              <td>
+                                <StateBadge state={current?.state ?? "stopped"} flat />
+                                <small className="service-enabled">{enabled}</small>
+                              </td>
+                              <td>
+                                <div className="service-ports">
+                                  {current?.state === "running" && current.listening_ports?.length
+                                    ? current.listening_ports.map((port) => <span key={port}>:{port}</span>)
+                                    : <span className="port-empty" aria-label="No listening port">−</span>}
+                                </div>
+                              </td>
+                              <td><code>{commandLine}</code></td>
+                              <td>
+                                <div className="row-actions">
+                                  <button
+                                    className="icon-button"
+                                    title={active ? "Stop" : "Start"}
+                                    aria-label={`${active ? "Stop" : "Start"} ${item.name}`}
+                                    disabled={!!busy || (!active && !item.enabled)}
+                                    onClick={() => serviceAction(item.id, active ? "stop" : "start")}
+                                  >
+                                    <Icon name={active ? "stop" : "play"} size={16} />
+                                  </button>
+                                  <button
+                                    className="icon-button"
+                                    title="Restart"
+                                    aria-label={`Restart ${item.name}`}
+                                    disabled={!!busy || !item.enabled}
+                                    onClick={() => serviceAction(item.id, "restart")}
+                                  >
+                                    <Icon name="restart" size={16} />
+                                  </button>
+                                  <button
+                                    className="icon-button"
+                                    title="Open details"
+                                    aria-label={`Open ${item.name}`}
+                                    onClick={() => setSelectedServiceId(item.id)}
+                                  >
+                                    <Icon name="arrow" size={16} />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   )}
-                </div>
+                </section>
                 <DockerPanel key={workspace.id} workspaceId={workspace.id} />
                 <div className="workspace-footer">
                   <span>Service configurations run as your local user.</span>
@@ -1440,7 +1380,7 @@ export default function App() {
         />
       )}
       {dialog?.kind === "configuration" && workspace && configuration && (
-        <ConfigurationEditor workspaceId={workspace.id} initial={configuration} onSaved={async () => { await loadWorkspace(workspace.id); setDialog(null); }} onClose={() => setDialog(null)} />
+        <ConfigurationEditor workspaceId={workspace.id} rootPath={workspace.root_path} initial={configuration} onSaved={async () => { await loadWorkspace(workspace.id); setDialog(null); }} onClose={() => setDialog(null)} />
       )}
     </>
   );
